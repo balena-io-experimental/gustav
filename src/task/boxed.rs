@@ -1,7 +1,6 @@
 use json_patch::Patch;
 
-use super::{Handler, Task};
-use crate::system::Context;
+use super::{Context, Handler, Task};
 
 pub(crate) struct BoxedIntoTask<S>(Box<dyn ErasedIntoTask<S>>);
 
@@ -29,7 +28,7 @@ impl<S> BoxedIntoTask<S> {
         }))
     }
 
-    pub fn into_task(self, id: String, context: Context<S>) -> Task<S> {
+    pub fn into_task(self, id: &str, context: Context<S>) -> Task<S> {
         self.0.into_task(id, context)
     }
 }
@@ -43,12 +42,12 @@ impl<S> Clone for BoxedIntoTask<S> {
 trait ErasedIntoTask<S> {
     fn clone_box(&self) -> Box<dyn ErasedIntoTask<S>>;
 
-    fn into_task(self: Box<Self>, id: String, context: Context<S>) -> Task<S>;
+    fn into_task(self: Box<Self>, id: &str, context: Context<S>) -> Task<S>;
 }
 
 struct MakeIntoTask<H, S> {
     pub(crate) handler: H,
-    pub(crate) into_task: fn(String, H, Context<S>) -> Task<S>,
+    pub(crate) into_task: fn(&str, H, Context<S>) -> Task<S>,
 }
 
 impl<S, H> ErasedIntoTask<S> for MakeIntoTask<H, S>
@@ -63,7 +62,7 @@ where
         })
     }
 
-    fn into_task(self: Box<Self>, id: String, context: Context<S>) -> Task<S> {
+    fn into_task(self: Box<Self>, id: &str, context: Context<S>) -> Task<S> {
         (self.into_task)(id, self.handler, context)
     }
 }

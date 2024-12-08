@@ -8,19 +8,6 @@ pub trait IntoResult<O> {
     fn into_result(self, system: &System) -> Result<O>;
 }
 
-impl<T, O> IntoResult<O> for Option<T>
-where
-    O: Default,
-    T: IntoResult<O>,
-{
-    fn into_result(self, system: &System) -> Result<O> {
-        match self {
-            None => Err(Error::ConditionFailed("unknown".to_string())),
-            Some(value) => value.into_result(system),
-        }
-    }
-}
-
 impl<T, E, O> IntoResult<O> for core::result::Result<T, E>
 where
     T: IntoResult<O>,

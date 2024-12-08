@@ -37,7 +37,7 @@ While the ideas behind planning systems go back to the 1970s, they have seen ver
 Let's create a system controller for a simple counting system. Let's define a Job that operates on i32
 
 ```rust
-use gustav::*;
+use gustav::task::*;
 use gustav::extract::{Target, Update};
 
 /// Plus one is a job that updates a counter if it is below some target
@@ -126,7 +126,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 // The state model
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 struct State {
     counters: HashMap<String, i32>,
 }
@@ -166,7 +166,7 @@ async fn main() {
     let agent = Worker::new()
         // The plus_one job is applicable to an UPDATE operation
         // on any given counter
-        .job("/counters/:name", update(plus_one))
+        .job("/counters/{name}", update(plus_one))
         // Initialize two counters "a" and "b" to 0
         .with_state(State {counters: HashMap::from([("a".to_string(), 0), ("b".to_string(), 0)])})
 
@@ -192,9 +192,7 @@ On the above example, the job definition is practically identical to the one in 
 As programmers, we want to be able to build code by composing simpler behaviors into more complex ones. We might want to guide the planner towards a specific solution, using the primitives we already have. For instance, let's say we want to help the planner get to a solution faster as adding tasks one by one takes too much time. We want to define a `plus_two` task, that increases the counter by 2. We could create another primitive task to update the counter by two, but as programmers, we would like to reuse the code we have already defined. We can do that using methods.
 
 ```rust
-use gustav::system::Context;
-
-fn plus_two(counter: Update<State, i32>, tgt: Target<State, i32>) -> Vec<Task<i32>> {
+fn plus_two(counter: Update<State, i32>, tgt: Target<State, i32>, Path(name): Path<String>) -> Vec<Task<i32>> {
     if *tgt - *counter < 2 {
         // Returning an empty result tells the planner
         // the task is not applicable to reach the target
@@ -204,8 +202,8 @@ fn plus_two(counter: Update<State, i32>, tgt: Target<State, i32>) -> Vec<Task<i3
     // A compound job returns a list of tasks that need to be executed
     // to achieve a certain goal
     vec![
-        plus_one.into_task(Context::from_target(*tgt)),
-        plus_one.into_task(Context::from_target(*tgt)),
+        plus_one.into_task(Context::new().target(*tgt).arg("name", &name)),
+        plus_one.into_task(Context::new().target(*tgt).arg("name", &name)),
     ]
 }
 
@@ -213,8 +211,8 @@ fn plus_two(counter: Update<State, i32>, tgt: Target<State, i32>) -> Vec<Task<i3
 async fn main() {
     // build our agent using the plus one job
     let agent = Worker::new()
-        .job("/counters/:name", update(plus_one))
-        .job("/counters/:name", update(plus_two))
+        .job("/counters/{name}", update(plus_one))
+        .job("/counters/{name}", update(plus_two))
         // Initialize two counters "a" and "b" to 0
         .with_state(State {counters: HashMap::from([("a".to_string(), 0), ("b".to_string(), 0)])})
 

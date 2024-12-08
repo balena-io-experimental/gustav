@@ -1,6 +1,6 @@
 use gustav::extract::{Target, Update};
-use gustav::system::{Context, System};
-use gustav::*;
+use gustav::system::System;
+use gustav::task::*;
 use json_patch::Patch;
 use serde_json::{from_value, json};
 
@@ -20,7 +20,7 @@ fn my_task_effect(mut counter: Update<i32>, tgt: Target<i32>) -> Effect<Update<i
 fn it_allows_to_dry_run_tasks() {
     let system = System::from(0);
     let job = my_task_effect.into_job();
-    let action = job.into_task(Context::from_target(1));
+    let action = job.into_task(Context::new().target(1));
 
     // Get the list of changes that the action performs
     let changes = action.dry_run(&system).unwrap();

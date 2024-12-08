@@ -2,41 +2,26 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error(transparent)]
-    SerializationError(#[from] serde_json::error::Error),
+    #[error("cannot read system state: ${0}")]
+    StateReadFailed(#[from] super::system::SystemReadError),
 
-    #[error(transparent)]
-    PatchFailed(#[from] json_patch::PatchError),
+    #[error("cannot write system state: ${0}")]
+    StateWriteFailed(#[from] super::system::SystemWriteError),
 
-    #[error("the string `{0}` is not a valid path")]
-    InvalidPath(String),
+    #[error("cannot extract path: ${0}")]
+    PathExtractFailed(#[from] super::extract::PathDeserializationError),
 
-    #[error("no target available on the context")]
-    TargetIsNone,
+    #[error("cannot extract target: ${0}")]
+    TargetExtractFailed(#[from] super::extract::TargetExtractError),
 
-    #[error("cannot expand an atom task")]
-    CannotExpandTask,
+    #[error("cannot extract view: ${0}")]
+    ViewExtractFailed(#[from] super::extract::ViewExtractError),
+
+    #[error("cannot calculate view result: ${0}")]
+    ViewResultFailed(#[from] super::extract::ViewResultError),
 
     #[error("condition failed: ${0}")]
-    ConditionFailed(String),
-
-    #[error("cannot resolve state path `{path}`: ${reason}")]
-    TargetResolveFailed {
-        path: String,
-        reason: jsonptr::resolve::ResolveError,
-    },
-
-    #[error("cannot resolve path `{path}` on system state: ${reason}")]
-    PointerResolveFailed {
-        path: String,
-        reason: jsonptr::resolve::ResolveError,
-    },
-
-    #[error("cannot assign path `{path}` on system state: ${reason}")]
-    PointerAssignFailed {
-        path: String,
-        reason: jsonptr::assign::AssignError,
-    },
+    TaskConditionFailed(#[from] super::task::ConditionFailed),
 
     #[error(transparent)]
     Other(#[from] Box<dyn std::error::Error>),

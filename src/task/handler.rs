@@ -1,9 +1,8 @@
 use json_patch::Patch;
 
-use super::effect::Effect;
-use super::{IntoEffect, IntoResult, Job, Task};
+use super::{Context, Effect, IntoEffect, IntoResult, Job, Task};
 use crate::error::{Error, IntoError};
-use crate::system::{Context, FromSystem, System};
+use crate::system::{FromSystem, System};
 
 pub trait Handler<S, T, O, I = O>: Clone + Send + 'static {
     fn call(self, system: &System, context: Context<S>) -> Effect<O, Error, I>;

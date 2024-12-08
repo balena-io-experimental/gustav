@@ -1,20 +1,65 @@
 mod boxed;
+mod context;
 mod effect;
 mod handler;
 mod job;
 mod result;
 
 use json_patch::{Patch, PatchOperation};
+use std::fmt::{self, Display};
 use std::future::Future;
 use std::pin::Pin;
 
-use crate::error::Error;
-use crate::system::{Context, System};
+use crate::error::{Error, IntoError};
+use crate::system::System;
 
+pub use context::*;
 pub use effect::*;
 pub use handler::*;
 pub use job::*;
 pub(crate) use result::*;
+
+#[derive(Debug)]
+pub struct ConditionFailed(String);
+
+impl Default for ConditionFailed {
+    fn default() -> Self {
+        ConditionFailed::new("unknown")
+    }
+}
+
+impl ConditionFailed {
+    fn new(msg: impl Into<String>) -> Self {
+        Self(msg.into())
+    }
+}
+
+impl std::error::Error for ConditionFailed {}
+
+impl Display for ConditionFailed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl IntoError for ConditionFailed {
+    fn into_error(self) -> Error {
+        Error::TaskConditionFailed(self)
+    }
+}
+
+impl<T, O> IntoResult<O> for Option<T>
+where
+    O: Default,
+    T: IntoResult<O>,
+{
+    fn into_result(self, system: &System) -> Result<O> {
+        match self {
+            None => Err(ConditionFailed::default())?,
+            Some(value) => value.into_result(system),
+        }
+    }
+}
 
 type ActionOutput = Pin<Box<dyn Future<Output = Result<Patch>>>>;
 type DryRun<S> = Box<dyn FnOnce(&System, Context<S>) -> Result<Patch>>;
@@ -38,7 +83,7 @@ pub enum Task<S> {
 }
 
 impl<S> Task<S> {
-    pub(crate) fn atom<H, T, I>(id: String, handler: H, context: Context<S>) -> Self
+    pub(crate) fn atom<H, T, I>(id: &str, handler: H, context: Context<S>) -> Self
     where
         H: Handler<S, T, Patch, I>,
         S: 'static,
@@ -46,7 +91,7 @@ impl<S> Task<S> {
     {
         let hc = handler.clone();
         Self::Atom {
-            id,
+            id: String::from(id),
             context,
             dry_run: Box::new(|system: &System, context: Context<S>| {
                 let effect = hc.call(system, context);
@@ -65,13 +110,13 @@ impl<S> Task<S> {
         }
     }
 
-    pub(crate) fn list<H, T>(id: String, handler: H, context: Context<S>) -> Self
+    pub(crate) fn list<H, T>(id: &str, handler: H, context: Context<S>) -> Self
     where
         H: Handler<S, T, Vec<Task<S>>>,
         S: 'static,
     {
         Self::List {
-            id,
+            id: String::from(id),
             context,
             expand: Box::new(|system: &System, context: Context<S>| {
                 // List tasks cannot perform changes to the system
@@ -84,6 +129,7 @@ impl<S> Task<S> {
 
     /// Run every action in the task sequentially and return the
     /// aggregate changes.
+    /// TODO: this should probably only have crate visibility
     pub fn dry_run(self, system: &System) -> Result<Patch> {
         match self {
             Self::Atom {
@@ -96,12 +142,13 @@ impl<S> Task<S> {
                 let jobs = (expand)(system, context)?;
                 let mut system = system.clone();
                 for job in jobs {
-                    job.dry_run(&system).and_then(|Patch(patch)| {
-                        // Save a copy of the changes
-                        changes.append(&mut patch.clone());
-                        // And apply the changes to the system copy
-                        system.patch(Patch(patch))
-                    })?;
+                    let Patch(patch) = job.dry_run(&system)?;
+
+                    // Append a copy of the patch to the total changes
+                    changes.append(&mut patch.clone());
+
+                    // And apply the changes to the system copy
+                    system.patch(Patch(patch))?;
                 }
                 Ok(Patch(changes))
             }
@@ -109,11 +156,12 @@ impl<S> Task<S> {
     }
 
     /// Run the task sequentially
-    pub async fn run(self, system: &mut System) -> core::result::Result<(), Error> {
+    pub async fn run(self, system: &mut System) -> Result<()> {
         match self {
             Self::Atom { context, run, .. } => {
                 let changes = (run)(system, context).await?;
-                system.patch(changes)
+                system.patch(changes)?;
+                Ok(())
             }
             Self::List {
                 context, expand, ..
@@ -130,9 +178,9 @@ impl<S> Task<S> {
     /// Expand the task into its composing sub-jobs.
     ///
     /// If the task is an atom the expansion will fail
-    pub fn expand(self, system: &System) -> core::result::Result<Vec<Task<S>>, Error> {
+    pub fn expand(self, system: &System) -> Result<Vec<Task<S>>> {
         match self {
-            Self::Atom { .. } => Err(Error::CannotExpandTask),
+            Self::Atom { .. } => Ok(vec![]),
             Self::List {
                 context, expand, ..
             } => (expand)(system, context),
@@ -144,7 +192,7 @@ impl<S> Task<S> {
 mod tests {
     use super::*;
     use crate::extract::{Target, Update};
-    use crate::system::{Context, System};
+    use crate::system::System;
     use json_patch::Patch;
     use serde::{Deserialize, Serialize};
     use serde_json::{from_value, json};
@@ -175,8 +223,8 @@ mod tests {
         }
 
         vec![
-            plus_one.into_task(Context::from_target(*tgt)),
-            plus_one.into_task(Context::from_target(*tgt)),
+            plus_one.into_task(Context::new().target(*tgt)),
+            plus_one.into_task(Context::new().target(*tgt)),
         ]
     }
 
@@ -196,14 +244,14 @@ mod tests {
     fn it_gets_metadata_from_function() {
         let job = plus_one.into_job();
 
-        assert_eq!(job.id(), "gustav::task::tests::plus_one".to_string());
+        assert_eq!(job.id().as_str(), "gustav::task::tests::plus_one");
     }
 
     #[test]
     fn it_allows_to_dry_run_tasks() {
         let system = System::from(0);
         let job = plus_one.into_job();
-        let task = job.into_task(Context::from_target(1));
+        let task = job.into_task(Context::new().target(1));
 
         // Get the list of changes that the action performs
         let changes = task.dry_run(&system).unwrap();
@@ -220,7 +268,7 @@ mod tests {
     fn it_allows_to_dry_run_composite_tasks() {
         let system = System::from(0);
         let job = plus_two.into_job();
-        let task = job.into_task(Context::from_target(2));
+        let task = job.into_task(Context::new().target(2));
 
         // Get the list of changes that the method performs
         let changes = task.dry_run(&system).unwrap();
@@ -237,7 +285,7 @@ mod tests {
     #[tokio::test]
     async fn it_allows_to_run_composite_tasks() {
         let mut system = System::from(0);
-        let task = plus_two.into_task(Context::from_target(2));
+        let task = plus_two.into_task(Context::new().target(2));
 
         // Run the action
         task.run(&mut system).await.unwrap();
@@ -251,7 +299,7 @@ mod tests {
     #[tokio::test]
     async fn it_runs_async_actions() {
         let mut system = System::from(0);
-        let task = plus_one.into_task(Context::from_target(1));
+        let task = plus_one.into_task(Context::new().target(1));
 
         // Run the action
         task.run(&mut system).await.unwrap();
@@ -266,7 +314,7 @@ mod tests {
     async fn it_allows_extending_actions_with_effect() {
         let mut system = System::from(0);
         let job = plus_one_async.into_job();
-        let task = job.into_task(Context::from_target(1));
+        let task = job.into_task(Context::new().target(1));
 
         // Run the action
         task.run(&mut system).await.unwrap();
@@ -279,7 +327,7 @@ mod tests {
     #[tokio::test]
     async fn it_allows_actions_returning_errors() {
         let mut system = System::from(1);
-        let task = plus_one_async.into_task(Context::from_target(1));
+        let task = plus_one_async.into_task(Context::new().target(1));
 
         let res = task.run(&mut system).await;
         assert!(res.is_err());
@@ -313,10 +361,11 @@ mod tests {
         let mut system = System::from(state);
         let task = update_counter.into_job();
         let action = task.into_task(
-            Context::from_target(State {
-                counters: [("a".to_string(), 2), ("b".to_string(), 1)].into(),
-            })
-            .with_path("/counters/a"),
+            Context::new()
+                .target(State {
+                    counters: [("a".to_string(), 2), ("b".to_string(), 1)].into(),
+                })
+                .path("/counters/a"),
         );
 
         // Run the action

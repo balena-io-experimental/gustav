@@ -1,7 +1,7 @@
 use crate::error::IntoError;
 
-use super::Context;
 use super::System;
+use crate::task::Context;
 
 pub trait FromSystem<S>: Sized {
     type Error: IntoError + 'static;

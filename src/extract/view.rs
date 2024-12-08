@@ -2,13 +2,14 @@ use json_patch::{diff, Patch};
 use jsonptr::resolve::ResolveError;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use std::fmt::{self, Display};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
-use crate::error::Error;
+use crate::error::{Error, IntoError};
 use crate::path::Path;
-use crate::system::{Context, FromSystem, System};
-use crate::task::{Effect, IntoEffect, IntoResult, Result};
+use crate::system::{FromSystem, System};
+use crate::task::{Context, Effect, IntoEffect, IntoResult, Result};
 
 /// Extracts a sub-element of a state S as indicated by
 /// a path.
@@ -20,6 +21,72 @@ pub struct View<S, T = S> {
     state: Option<T>,
     path: Path,
     _system: PhantomData<S>,
+}
+
+#[derive(Debug)]
+pub enum ViewExtractError {
+    PathResolveFailed {
+        path: String,
+        reason: jsonptr::resolve::ResolveError,
+    },
+    DeserializationFailed(serde_json::error::Error),
+}
+
+impl std::error::Error for ViewExtractError {}
+
+impl Display for ViewExtractError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ViewExtractError::PathResolveFailed { path, reason } => {
+                write!(
+                    f,
+                    "cannot resolve path `{}` on system state: {}",
+                    path, reason
+                )?;
+            }
+            ViewExtractError::DeserializationFailed(err) => err.fmt(f)?,
+        }
+
+        Ok(())
+    }
+}
+
+impl IntoError for ViewExtractError {
+    fn into_error(self) -> Error {
+        Error::ViewExtractFailed(self)
+    }
+}
+
+#[derive(Debug)]
+pub enum ViewResultError {
+    PathAssignFailed {
+        path: String,
+        reason: jsonptr::assign::AssignError,
+    },
+    DeserializationFailed(serde_json::error::Error),
+}
+
+impl std::error::Error for ViewResultError {}
+
+impl Display for ViewResultError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ViewResultError::PathAssignFailed { path, reason } => {
+                write!(
+                    f,
+                    "cannot assign path `{}` on system state: {}",
+                    path, reason
+                )
+            }
+            ViewResultError::DeserializationFailed(err) => err.fmt(f),
+        }
+    }
+}
+
+impl IntoError for ViewResultError {
+    fn into_error(self) -> Error {
+        Error::ViewResultFailed(self)
+    }
 }
 
 impl<S, T> View<S, T> {
@@ -48,7 +115,7 @@ impl<S, T: Default> View<S, T> {
 }
 
 impl<S, T: DeserializeOwned> FromSystem<S> for View<S, T> {
-    type Error = Error;
+    type Error = ViewExtractError;
 
     fn from_system(
         system: &System,
@@ -63,7 +130,7 @@ impl<S, T: DeserializeOwned> FromSystem<S> for View<S, T> {
         // Try to resolve the parent or fail
         parent
             .resolve(root)
-            .map_err(|e| Error::PointerResolveFailed {
+            .map_err(|e| ViewExtractError::PathResolveFailed {
                 path: context.path.to_string(),
                 reason: e,
             })?;
@@ -72,12 +139,15 @@ impl<S, T: DeserializeOwned> FromSystem<S> for View<S, T> {
         // resolved is because the value does not exist yet unless
         // the parent is a scalar
         let state: Option<T> = match pointer.resolve(root) {
-            Ok(value) => Some(serde_json::from_value::<T>(value.clone())?),
+            Ok(value) => Some(
+                serde_json::from_value::<T>(value.clone())
+                    .map_err(ViewExtractError::DeserializationFailed)?,
+            ),
             Err(e) => match e {
                 ResolveError::NotFound { .. } => None,
                 ResolveError::OutOfBounds { .. } => None,
                 _ => {
-                    return Err(Error::PointerResolveFailed {
+                    return Err(ViewExtractError::PathResolveFailed {
                         path: context.path.to_string(),
                         reason: e,
                     })
@@ -112,12 +182,13 @@ impl<S, T: Serialize> IntoResult<Patch> for View<S, T> {
         let pointer = self.path.as_ref();
 
         if let Some(state) = self.state {
-            let value = serde_json::to_value(state)?;
+            let value =
+                serde_json::to_value(state).map_err(ViewResultError::DeserializationFailed)?;
 
             // Assign the state to the copy
             pointer
                 .assign(root, value)
-                .map_err(|e| Error::PointerAssignFailed {
+                .map_err(|e| ViewResultError::PathAssignFailed {
                     path: self.path.to_string(),
                     reason: e,
                 })?;
@@ -148,7 +219,7 @@ pub struct Create<S, T = S> {
 }
 
 impl<S, T: DeserializeOwned + Default> FromSystem<S> for Create<S, T> {
-    type Error = Error;
+    type Error = ViewExtractError;
 
     fn from_system(
         system: &System,
@@ -165,7 +236,7 @@ impl<S, T: DeserializeOwned + Default> FromSystem<S> for Create<S, T> {
         // Try to resolve the parent or fail
         parent
             .resolve(root)
-            .map_err(|e| Error::PointerResolveFailed {
+            .map_err(|e| ViewExtractError::PathResolveFailed {
                 path: context.path.to_string(),
                 reason: e,
             })?;
@@ -178,7 +249,7 @@ impl<S, T: DeserializeOwned + Default> FromSystem<S> for Create<S, T> {
                 ResolveError::NotFound { .. } => (),
                 ResolveError::OutOfBounds { .. } => (),
                 _ => {
-                    return Err(Error::PointerResolveFailed {
+                    return Err(ViewExtractError::PathResolveFailed {
                         path: context.path.to_string(),
                         reason: e,
                     })
@@ -233,7 +304,7 @@ pub struct Update<S, T = S> {
 }
 
 impl<S, T: DeserializeOwned> FromSystem<S> for Update<S, T> {
-    type Error = Error;
+    type Error = ViewExtractError;
 
     fn from_system(
         system: &System,
@@ -246,11 +317,12 @@ impl<S, T: DeserializeOwned> FromSystem<S> for Update<S, T> {
         // reason, return an error
         let value = pointer
             .resolve(root)
-            .map_err(|e| Error::PointerResolveFailed {
+            .map_err(|e| ViewExtractError::PathResolveFailed {
                 path: context.path.to_string(),
                 reason: e,
             })?;
-        let state = serde_json::from_value::<T>(value.clone())?;
+        let state = serde_json::from_value::<T>(value.clone())
+            .map_err(ViewExtractError::DeserializationFailed)?;
 
         Ok(Update {
             state,
@@ -288,7 +360,7 @@ impl<S, T: Serialize> IntoEffect<Patch, Error> for Update<S, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::system::{Context, System};
+    use crate::system::System;
     use json_patch::Patch;
     use serde::{Deserialize, Serialize};
     use serde_json::json;
@@ -315,7 +387,7 @@ mod tests {
         let system = System::from(state);
 
         let mut view: View<State, i32> =
-            View::from_system(&system, &Context::default().with_path("/numbers/one")).unwrap();
+            View::from_system(&system, &Context::new().path("/numbers/one")).unwrap();
 
         assert_eq!(view.as_ref(), Some(&1));
 
@@ -344,16 +416,13 @@ mod tests {
 
         let system = System::from(state);
 
-        assert!(View::<State, i32>::from_system(
-            &system,
-            &Context::default().with_path("/numbers/one/two"),
-        )
-        .is_err());
-        assert!(View::<State, i32>::from_system(
-            &system,
-            &Context::default().with_path("/none/two"),
-        )
-        .is_err());
+        assert!(
+            View::<State, i32>::from_system(&system, &Context::new().path("/numbers/one/two"),)
+                .is_err()
+        );
+        assert!(
+            View::<State, i32>::from_system(&system, &Context::new().path("/none/two"),).is_err()
+        );
     }
 
     #[test]
@@ -367,7 +436,7 @@ mod tests {
         let system = System::from(state);
 
         let mut view: View<State, i32> =
-            View::from_system(&system, &Context::default().with_path("/numbers/three")).unwrap();
+            View::from_system(&system, &Context::new().path("/numbers/three")).unwrap();
 
         assert_eq!(view.as_ref(), None);
 
@@ -395,7 +464,7 @@ mod tests {
         let system = System::from(state);
 
         let mut view: Create<State, i32> =
-            Create::from_system(&system, &Context::default().with_path("/numbers/three")).unwrap();
+            Create::from_system(&system, &Context::new().path("/numbers/three")).unwrap();
         *view = 3;
 
         // Get the list changes to the view
@@ -419,11 +488,10 @@ mod tests {
 
         let system = System::from(state);
 
-        assert!(Create::<State, i32>::from_system(
-            &system,
-            &Context::default().with_path("/none/three")
-        )
-        .is_err());
+        assert!(
+            Create::<State, i32>::from_system(&system, &Context::new().path("/none/three"))
+                .is_err()
+        );
     }
 
     #[test]
@@ -437,7 +505,7 @@ mod tests {
         let system = System::from(state);
 
         let mut view: Update<State, i32> =
-            Update::from_system(&system, &Context::default().with_path("/numbers/two")).unwrap();
+            Update::from_system(&system, &Context::new().path("/numbers/two")).unwrap();
         *view = 3;
 
         // Get the list changes to the view
@@ -461,16 +529,14 @@ mod tests {
 
         let system = System::from(state);
 
-        assert!(Update::<State, i32>::from_system(
-            &system,
-            &Context::default().with_path("/numbers/three")
-        )
-        .is_err());
-        assert!(Update::<State, i32>::from_system(
-            &system,
-            &Context::default().with_path("/none/three")
-        )
-        .is_err());
+        assert!(
+            Update::<State, i32>::from_system(&system, &Context::new().path("/numbers/three"))
+                .is_err()
+        );
+        assert!(
+            Update::<State, i32>::from_system(&system, &Context::new().path("/none/three"))
+                .is_err()
+        );
     }
 
     #[test]
@@ -484,7 +550,7 @@ mod tests {
         let system = System::from(state);
 
         let mut view: View<State, i32> =
-            View::from_system(&system, &Context::default().with_path("/numbers/three")).unwrap();
+            View::from_system(&system, &Context::new().path("/numbers/three")).unwrap();
 
         assert_eq!(view.as_ref(), None);
 
@@ -513,7 +579,7 @@ mod tests {
         let system = System::from(state);
 
         let mut view: View<State, i32> =
-            View::from_system(&system, &Context::default().with_path("/numbers/one")).unwrap();
+            View::from_system(&system, &Context::new().path("/numbers/one")).unwrap();
 
         // Delete the value
         view.delete();
@@ -538,7 +604,7 @@ mod tests {
         let system = System::from(state);
 
         let mut view: View<State, String> =
-            View::from_system(&system, &Context::default().with_path("/numbers/1")).unwrap();
+            View::from_system(&system, &Context::new().path("/numbers/1")).unwrap();
 
         assert_eq!(view.as_ref(), Some(&"two".to_string()));
 
@@ -565,7 +631,7 @@ mod tests {
         let system = System::from(state);
 
         let mut view: View<State, String> =
-            View::from_system(&system, &Context::default().with_path("/numbers/2")).unwrap();
+            View::from_system(&system, &Context::new().path("/numbers/2")).unwrap();
 
         assert_eq!(view.as_ref(), None);
         view.create("three".to_string());
@@ -590,7 +656,7 @@ mod tests {
         let system = System::from(state);
 
         let mut view: View<State, String> =
-            View::from_system(&system, &Context::default().with_path("/numbers/1")).unwrap();
+            View::from_system(&system, &Context::new().path("/numbers/1")).unwrap();
 
         // Remove the second element
         view.delete();
@@ -617,7 +683,7 @@ mod tests {
         let system = System::from(state);
 
         let mut view: View<State, String> =
-            View::from_system(&system, &Context::default().with_path("/numbers/2")).unwrap();
+            View::from_system(&system, &Context::new().path("/numbers/2")).unwrap();
 
         // Remove the third element
         view.delete();
