@@ -4,7 +4,8 @@ An automated job orchestration library to build and execute dynamic workflows.
 
 Gustav uses [automated planning](https://en.wikipedia.org/wiki/Automated_planning_and_scheduling) (heavily based on [HTNs](https://en.wikipedia.org/wiki/Hierarchical_task_network)) to compose user defined jobs into a task workflow (represented as a [DAG](https://en.wikipedia.org/wiki/Directed_acyclic_graph)) to achieve a desired target system state. If failures happen during execution it can adapt the workflow to perform corrective actions or automatically retry certain operations. It is meant for more than job orchestration, but as a library to build autonomous system agents in Rust.
 
-NOTE: this project is still in very early stage, but its design is guided by [Mahler](https://github.com/balena-io-modules/mahler), it's NodeJS counterpart, and will share many of the same design concepts, with an API more suited for Rust that is heavily inspired by [Axum](https://github.com/tokio-rs/axum).
+> [!NOTE]
+> This project is still in very early stage, but its design is guided by [Mahler](https://github.com/balena-io-modules/mahler), it's NodeJS counterpart, and will share many of the same design concepts, with an API more suited for Rust that is heavily inspired by [Axum](https://github.com/tokio-rs/axum).
 
 ## Why build this?
 
@@ -12,7 +13,7 @@ In the tech industry we are increasingly reliant on automation for deployment an
 
 Static workflow definition tools do not scale well for this purpose as the diversity of conditions makes modelling too complex making the workflow harder and harder to maintain and test. We believe automated planning is a tool best suited for this problem: define a job and constraints for executing it and a planner decides if the job is applicable to a desired system state.
 
-While the ideas behind planning systems go back to the 1970s, they have seen very little usage outside of academia. One possible reason for this is that planning systems usually require some domain specific languages, or some variant of Lisp to program them, making them less appealing in the mainstream software industry, that generally has favored imperative programming languages. We expect that reducing this barrier of entry may make the use of automated planning a viable option for writing automated workflows.
+While the ideas behind planning systems go back to the 1970s, they have seen very little usage outside of academia. One possible reason for this is that planning systems usually require some domain specific languages, or some variant of Lisp to program them, making them less appealing in the mainstream software industry, that generally has favored imperative programming languages. We hope that reducing this barrier of entry may make the use of automated planning a viable option for writing automated workflows.
 
 ## Features
 
@@ -57,27 +58,27 @@ fn plus_one(mut counter: View<i32>, tgt: Target<i32>) -> Update<i32> {
 The job above updates the counter if it is below the target, otherwise it returs the same value that it currently has. When planning, a task that perform no changes on the system state is not selected, which allows us to control when jobs are applicable. To use the task, we need to create a worker.
 
 ```rust
+use gustav::worker::{Worker, SeekTarget, Error, Status};
+
 #[tokio::main]
-async fn main() {
-    // build our agent using the plus one job
-    let agent = Worker::new()
-        // The plus_one job is applicable to an UPDATE operation
-        // for global state
-        .job("/", update(plus_one))
+async fn main() -> Result<(), Error> {
+    // build our worker using the plus_one job
+    let worker = Worker::new()
+        // The plus_one job is applicable to an UPDATE
+        // operation to the global state
+        .job(update(plus_one))
         // The initial state of the worker
         .initial_state(0)
+        // Tell the worker to find a plan to the target
+        // state and execute it
+        .seek_target(3)?;
 
-
-    // Tell the agent to find a plan from the initial state (0)
-    // to the target state (3) and execute it
-    agent.seek_target(3);
-
-    // Wait for the agent to return a result
-    let res = agent.wait(0).await;
-
-
-    if let Some(state) = res {
-      println!("The system state is now {}", state);
+    // Wait for the worker to return a result
+    let worker = agent.wait(None).await;
+    if matches!(worker.status(), Status::Success) {
+        // State should now be 3
+        let state = worker.state()?;
+        println!("The system state is now {}", state);
     }
 }
 ```

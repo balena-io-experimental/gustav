@@ -315,9 +315,7 @@ mod tests {
 
     #[test]
     fn it_calculates_a_linear_workflow() {
-        let domain = Domain::new()
-            .job("", update(plus_one))
-            .job("", update(minus_one));
+        let domain = Domain::new().job(update(plus_one)).job(update(minus_one));
 
         let planner = Planner::new(domain);
         let workflow = planner.find_plan(0, 2).unwrap();
@@ -334,8 +332,8 @@ mod tests {
     #[test]
     fn it_aborts_search_if_plan_length_grows_too_much() {
         let domain = Domain::new()
-            .job("", update(buggy_plus_one))
-            .job("", update(minus_one));
+            .job(update(buggy_plus_one))
+            .job(update(minus_one));
 
         let planner = Planner::new(domain);
         let workflow = planner.find_plan(0, 2);
@@ -344,9 +342,7 @@ mod tests {
 
     #[test]
     fn it_calculates_a_linear_workflow_with_compound_tasks() {
-        let domain = Domain::new()
-            .job("", update(plus_two))
-            .job("", none(plus_one));
+        let domain = Domain::new().job(update(plus_two)).job(none(plus_one));
 
         let planner = Planner::new(domain);
         let workflow = planner.find_plan(0, 2).unwrap();
@@ -376,8 +372,8 @@ mod tests {
         };
 
         let domain = Domain::new()
-            .job("/counters/{counter}", update(minus_one))
-            .job("/counters/{counter}", update(plus_one));
+            .job(("/counters/{counter}", update(minus_one)))
+            .job(("/counters/{counter}", update(plus_one)));
 
         let planner = Planner::new(domain);
         let workflow = planner.find_plan(initial, target).unwrap();
@@ -408,9 +404,7 @@ mod tests {
             counters: HashMap::from([("one".to_string(), 2), ("two".to_string(), 0)]),
         };
 
-        let domain = Domain::new()
-            .job("/counters/{counter}", none(plus_one))
-            .job("/counters/{counter}", update(plus_two));
+        let domain = Domain::new().jobs("/counters/{counter}", [none(plus_one), update(plus_two)]);
 
         let planner = Planner::new(domain);
         let workflow = planner.find_plan(initial, target).unwrap();
@@ -439,10 +433,10 @@ mod tests {
             counters: HashMap::from([("one".to_string(), 3), ("two".to_string(), 0)]),
         };
 
-        let domain = Domain::new()
-            .job("/counters/{counter}", none(plus_one))
-            .job("/counters/{counter}", none(plus_two))
-            .job("/counters/{counter}", update(plus_three));
+        let domain = Domain::new().jobs(
+            "/counters/{counter}",
+            [none(plus_one), none(plus_two), update(plus_three)],
+        );
 
         let planner = Planner::new(domain);
         let workflow = planner.find_plan(initial, target).unwrap();
@@ -654,7 +648,7 @@ mod tests {
                     update(put),
                 ],
             )
-            .job("/blocks", update(move_blks));
+            .job(("/blocks", update(move_blks)));
 
         let planner = Planner::new(domain);
 

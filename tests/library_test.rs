@@ -41,11 +41,11 @@ fn plus_one(mut counter: View<i32>, Target(tgt): Target<i32>) -> IO<i32> {
 async fn test_worker() {
     init();
     let worker = Worker::new()
-        .job(
+        .job((
             "/{counter}",
             update(plus_one)
                 .with_description(|Args(counter): Args<String>| format!("{counter} + 1")),
-        )
+        ))
         .initial_state(Counters(HashMap::from([
             ("a".to_string(), 0),
             ("b".to_string(), 0),

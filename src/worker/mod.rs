@@ -24,6 +24,7 @@ mod logging;
 #[cfg(feature = "logging")]
 pub use logging::init as init_logging;
 
+use crate::planner::RoutedJob;
 use crate::system::System;
 use crate::workflow::WorkflowStatus;
 use crate::{
@@ -200,9 +201,15 @@ impl<T> Worker<T, Uninitialized> {
     }
 
     /// Add a job to the worker domain
-    pub fn job(self, route: &'static str, job: Job) -> Self {
+    pub fn job(self, job: impl Into<RoutedJob>) -> Self {
         let Self { mut inner, .. } = self;
-        inner.domain = inner.domain.job(route, job);
+        inner.domain = inner.domain.job(job);
+        Worker::from_inner(inner)
+    }
+
+    pub fn jobs<const N: usize>(self, route: &'static str, jobs: [Job; N]) -> Self {
+        let Self { mut inner, .. } = self;
+        inner.domain = inner.domain.jobs(route, jobs);
         Worker::from_inner(inner)
     }
 
@@ -486,7 +493,13 @@ impl<T> Stream for FollowStream<T> {
     }
 }
 
+const RUNNING_STATUS: Status = Status::Running;
+
 impl<T> Worker<T, Running> {
+    pub fn status(&self) -> &Status {
+        &RUNNING_STATUS
+    }
+
     /// Returns a stream of updated states after each system change.
     ///
     /// Best effort: updates may be missed if the receiver lags behind.
@@ -630,8 +643,6 @@ impl<T: Serialize> SeekTarget<T> for Worker<T, Idle> {
 
 // -- Worker is waiting for the target search to finish
 
-const RUNNING_STATUS: Status = Status::Running;
-
 impl<T> Worker<T, Waiting> {
     /// Cancel the running worker
     ///
@@ -761,7 +772,7 @@ mod tests {
     async fn test_worker_complex_state() {
         init();
         let worker = Worker::new()
-            .job("/{counter}", update(plus_one))
+            .job(("/{counter}", update(plus_one)))
             .initial_state(Counters(HashMap::from([
                 ("one".to_string(), 0),
                 ("two".to_string(), 0),
@@ -788,7 +799,7 @@ mod tests {
     async fn test_worker_bug() {
         init();
         let worker = Worker::new()
-            .job("", update(buggy_plus_one))
+            .job(update(buggy_plus_one))
             .with_opts(WorkerOpts::default().with_max_retries(1))
             .initial_state(0)
             .seek_target(2)
@@ -801,7 +812,7 @@ mod tests {
     async fn test_worker_timeout() {
         init();
         let worker = Worker::new()
-            .job("", update(plus_one))
+            .job(update(plus_one))
             .initial_state(0)
             .seek_target(2)
             .unwrap();
@@ -814,7 +825,7 @@ mod tests {
     async fn test_worker_follow_updates() {
         init();
         let worker = Worker::new()
-            .job("", update(plus_one))
+            .job(update(plus_one))
             .initial_state(0)
             .seek_target(2)
             .unwrap();
@@ -837,7 +848,7 @@ mod tests {
     async fn test_worker_follow_best_effort_loss() {
         init();
         let worker = Worker::new()
-            .job("", update(plus_one))
+            .job(update(plus_one))
             .initial_state(0)
             .seek_target(100)
             .unwrap();
@@ -864,7 +875,7 @@ mod tests {
     async fn test_worker_interrupt_status() {
         init();
         let worker = Worker::new()
-            .job("", update(plus_one))
+            .job(update(plus_one))
             .initial_state(0)
             .seek_target(5)
             .unwrap();
@@ -879,7 +890,7 @@ mod tests {
     async fn test_follow_stream_closes_on_worker_end() {
         init();
         let worker = Worker::new()
-            .job("", update(plus_one))
+            .job(update(plus_one))
             .initial_state(0)
             .seek_target(1)
             .unwrap();
@@ -901,7 +912,7 @@ mod tests {
     async fn test_worker_timeout_then_complete() {
         init();
         let worker = Worker::new()
-            .job("", update(plus_one))
+            .job(update(plus_one))
             .initial_state(0)
             .seek_target(2)
             .unwrap();

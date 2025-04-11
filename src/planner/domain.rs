@@ -18,6 +18,24 @@ pub struct Domain {
     index: HashMap<Box<str>, String>,
 }
 
+pub struct RoutedJob {
+    route: &'static str,
+    job: Job,
+}
+
+impl From<Job> for RoutedJob {
+    fn from(job: Job) -> RoutedJob {
+        RoutedJob { route: "", job }
+    }
+}
+
+impl From<(&'static str, Job)> for RoutedJob {
+    fn from(pair: (&'static str, Job)) -> RoutedJob {
+        let (route, job) = pair;
+        RoutedJob { route, job }
+    }
+}
+
 impl Domain {
     pub fn new() -> Self {
         Self {
@@ -32,13 +50,15 @@ impl Domain {
     ///
     /// This function will panic if the route is not a valid path
     /// or if a job is assigned to multiple routes
-    pub fn job(self, route: &'static str, job: Job) -> Self {
+    pub fn job(self, job: impl Into<RoutedJob>) -> Self {
         // TODO: it would be great to figure out a way to validate
         // that the pointer is valid for the parent state at compile time
         let Self {
             mut router,
             mut index,
         } = self;
+
+        let RoutedJob { route, job } = job.into();
 
         let job_id = String::from(job.id());
         let operation = job.operation();
@@ -81,7 +101,7 @@ impl Domain {
 
     pub fn jobs<const N: usize>(self, route: &'static str, list: [Job; N]) -> Self {
         list.into_iter()
-            .fold(self, |domain, job| domain.job(route, job))
+            .fold(self, |domain, job| domain.job((route, job)))
     }
 
     // This allows to find the path that a task relates to from the
@@ -300,8 +320,8 @@ mod tests {
     #[test]
     fn it_finds_jobs_ordered_by_degree() {
         let domain = Domain::new()
-            .job("/counters/{counter}", update(plus_one))
-            .job("/counters/{counter}", update(plus_two));
+            .job(("/counters/{counter}", update(plus_one)))
+            .job(("/counters/{counter}", update(plus_two)));
 
         let jobs: Vec<&str> = domain
             .find_jobs_at("/counters/{counter}")
@@ -315,8 +335,8 @@ mod tests {
     #[test]
     fn it_ignores_none_jobs() {
         let domain = Domain::new()
-            .job("/counters/{counter}", none(plus_one))
-            .job("/counters/{counter}", update(plus_two));
+            .job(("/counters/{counter}", none(plus_one)))
+            .job(("/counters/{counter}", update(plus_two)));
 
         let jobs: Vec<&str> = domain
             .find_jobs_at("/counters/{counter}")
@@ -331,23 +351,23 @@ mod tests {
     #[should_panic]
     fn it_fails_if_assigning_the_same_job_to_multiple_ops() {
         Domain::new()
-            .job("/counters/{counter}", update(plus_one))
-            .job("/counters/{counter}", update(plus_one));
+            .job(("/counters/{counter}", update(plus_one)))
+            .job(("/counters/{counter}", update(plus_one)));
     }
 
     #[test]
     #[should_panic]
     fn it_fails_if_assigning_the_same_job_to_multiple_routes() {
         Domain::new()
-            .job("/counters/{counter}", update(plus_one))
-            .job("/numbers/{counter}", create(plus_one));
+            .job(("/counters/{counter}", update(plus_one)))
+            .job(("/numbers/{counter}", create(plus_one)));
     }
 
     #[test]
     fn it_constructs_a_path_given_arguments() {
         let domain = Domain::new()
-            .job("/counters/{counter}", none(plus_one))
-            .job("/counters/{counter}", update(plus_two));
+            .job(("/counters/{counter}", none(plus_one)))
+            .job(("/counters/{counter}", update(plus_two)));
 
         let args = PathArgs(vec![(Arc::from("counter"), String::from("one"))]);
         let path = domain.find_path_for_job(plus_one.id(), &args).unwrap();
@@ -357,7 +377,7 @@ mod tests {
     #[test]
     fn test_wildcard_parameter_replacement() {
         let func = |file: View<()>| file;
-        let domain = Domain::new().job("/files/{*path}", update(func));
+        let domain = Domain::new().job(("/files/{*path}", update(func)));
 
         let args = PathArgs(vec![(
             Arc::from("path"),
@@ -371,7 +391,7 @@ mod tests {
     #[test]
     fn test_escaped_parameters_remain() {
         let func = |file: View<()>| file;
-        let domain = Domain::new().job("/data/{{counter}}/edit", update(func));
+        let domain = Domain::new().job(("/data/{{counter}}/edit", update(func)));
 
         let args = PathArgs(vec![(Arc::from("counter"), "456".to_string())]);
         let result = domain.find_path_for_job(func.id(), &args).unwrap();
@@ -382,7 +402,7 @@ mod tests {
     #[test]
     fn test_mixed_placeholders() {
         let func = |file: View<()>| file;
-        let domain = Domain::new().job("/users/{id}/files/{{file}}/{*path}", update(func));
+        let domain = Domain::new().job(("/users/{id}/files/{{file}}/{*path}", update(func)));
 
         let args = PathArgs(vec![
             (Arc::from("id"), "42".to_string()),
@@ -410,7 +430,7 @@ mod tests {
     #[test]
     fn test_error_if_unmatched_placeholders_remain() {
         let func = |file: View<()>| file;
-        let domain = Domain::new().job("/tasks/{task_id}/check", update(func));
+        let domain = Domain::new().job(("/tasks/{task_id}/check", update(func)));
 
         let args = PathArgs(vec![]); // No arguments provided
         let result = domain.find_path_for_job(func.id(), &args);
@@ -424,8 +444,8 @@ mod tests {
         struct Counters(HashMap<String, i32>);
 
         let domain = Domain::new()
-            .job("/{counter}", update(plus_one))
-            .job("/{counter}", update(plus_two));
+            .job(("/{counter}", update(plus_one)))
+            .job(("/{counter}", update(plus_two)));
 
         let task = plus_one.with_target(3).with_arg("counter", "one");
 
@@ -456,8 +476,8 @@ mod tests {
         struct Counters(HashMap<String, i32>);
 
         let domain = Domain::new()
-            .job("/{counter}", update(plus_one))
-            .job("/{counter}", update(plus_two));
+            .job(("/{counter}", update(plus_one)))
+            .job(("/{counter}", update(plus_two)));
 
         let task = plus_two.with_target(3).with_arg("counter", "one");
 
