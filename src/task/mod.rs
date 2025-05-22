@@ -396,7 +396,7 @@ mod tests {
 
     #[test]
     fn it_gets_metadata_from_function() {
-        assert_eq!(plus_one.id(), "gustav::task::tests::plus_one");
+        assert_eq!(plus_one.id(), "mahler::task::tests::plus_one");
     }
 
     #[test]
@@ -409,7 +409,7 @@ mod tests {
             .with_description(|Target(tgt): Target<i32>| format!("+1 until {tgt}"));
 
         // The target has not been assigned so the default description is returned
-        assert_eq!(task.to_string(), "gustav::task::tests::plus_one()");
+        assert_eq!(task.to_string(), "mahler::task::tests::plus_one()");
 
         let task = task.with_target(2);
         // Now the description can be used

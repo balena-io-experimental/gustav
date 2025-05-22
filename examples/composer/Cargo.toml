@@ -1,5 +1,5 @@
 [package]
-name = "gustav-examples-composer"
+name = "mahler-examples-composer"
 version = "0.0.0"
 edition = "2021"
 publish = false
@@ -8,7 +8,7 @@ publish = false
 anyhow = "1.0.98"
 bollard = { version = "0.18.1" }
 futures-util = { version = "0.3.31", default-features = false }
-gustav = { path = "../../", features = ["logging"] }
+mahler = { path = "../../", features = ["logging"] }
 log = "0.4.27"
 serde = { version = "1.0.219", features = ["derive"] }
 thiserror = "2.0.12"
