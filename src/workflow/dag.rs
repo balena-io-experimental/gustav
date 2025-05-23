@@ -8,22 +8,22 @@ use super::{AggregateError, Interrupt};
 
 type Link<T> = Option<Arc<RwLock<Node<T>>>>;
 
-/**
-* A node in a DAG is a recursive data structure that
-* can represent either a value, a fork in the graph,
-* or a joining of paths.
-*
-* For instance, the DAG below (reading from left to right)
-*
-* ```text
-*         + - c - d - +
-* a - b - +           + - g
-*         + - e - f - +
-* ```
-*
-* will contain 7 value nodes (a-g), one fork node (after b) and one join node
-* (before g)
-*/
+/// DAG node type
+///
+/// A node in a DAG is a recursive data structure that
+/// can represent either a value, a fork in the graph,
+/// or a joining of paths.
+///
+/// For instance, the DAG below (reading from left to right)
+///
+/// ```text
+///         + - c - d - +
+/// a - b - +           + - g
+///         + - e - f - +
+/// ```
+///
+/// will contain 7 value nodes (a-g), one fork node (after b) and one join node
+/// (before g)
 enum Node<T> {
     Item { value: T, next: Link<T> },
     Fork { next: Vec<Link<T>> },
@@ -104,12 +104,216 @@ impl<T> Iterator for Iter<T> {
 }
 
 #[derive(Clone)]
+/// Utility type to operate with Directed Acyclic Graphs (DAG)
+///
+/// This type is exported as a testing utility, to allow review of generated workflows using
+/// automated tests.
+///
+///    ```rust
+/// use mahler::task::{self, prelude::*};
+/// use mahler::extract::{View, Target};
+/// use mahler::worker::Worker;
+/// use mahler::{Dag, seq};
+///
+/// fn plus_one(mut counter: View<i32>, Target(tgt): Target<i32>) -> IO<i32> {
+///     if *counter < tgt {
+///         // Modify the counter if we are below target
+///         *counter += 1;
+///     }
+///
+///     // Return the updated counter
+///     with_io(counter, |counter| async {
+///         Ok(counter)
+///     })
+/// }
+///
+/// # tokio_test::block_on(async {
+/// // Setup the worker domain and resources
+/// let worker = Worker::new()
+///                 .job("", update(plus_one).with_description(|| "+1"))
+///                 .initial_state(0)
+///                 .unwrap();
+/// let workflow = worker.find_workflow(2).await.unwrap();
+///
+/// // We expect a linear DAG with two tasks
+/// let expected: Dag<&str> = seq!("+1", "+1");
+/// assert_eq!(workflow.to_string(), expected.to_string());
+/// # })
+/// ```
+///
+/// # Operating with DAGs
+///
+/// This module provides the [dag](`crate::dag`), [seq](`crate::seq`) and [par](`crate::par`) macros for easy DAG construction, `Dag`
+/// also implements the [`Add`] trait for simple concatenation, and [`Default`] can be used to
+/// create an empty DAG.
+///
+/// ```rust
+/// use mahler::{Dag, dag, seq, par};
+///
+/// // Some linear DAGs
+/// let ll0: Dag<i32> = seq!(1, 2, 3);
+/// let ll1: Dag<i32> = seq!(4, 5, 6);
+///
+/// // A DAG with two branches
+/// let fork: Dag<i32> = dag!(ll0, ll1);
+///
+/// // Continuing the DAG
+/// let dag = fork + seq!(7);
+///
+/// // A DAG with two branches
+/// let pr: Dag<i32> = par!(8,9);
+///
+/// // All DAGs can be concatenated
+/// let dag = dag + pr;
+/// ```
+///
+/// # String representation of a DAG
+///
+/// `Dag` implements `Display` for visual inspection of DAGs. `mahler` provides its own
+/// text representation of a DAG, optimizing readability of the graph when displaying in logs.
+///
+/// Each node is represented in a separate line, with the following symbols to indicate where the
+/// node is located on the graph branching.
+///
+/// - Each node is always preceeded by `-`
+/// - The start of a new fork in the DAG is represented by a `+`
+/// - The start of a new branch is represented by a `~`
+/// - The relative position of the fork/branch/node is indicated by the indentation level of the node
+///
+/// A linear DAG
+///
+/// ```text
+/// a - b - c
+/// ```
+///
+/// Is represented as
+///
+/// ```text
+/// - a
+/// - b
+/// - c
+/// ```
+///
+/// Use of [pretty_assertions](https://docs.rs/pretty_assertions/latest/pretty_assertions/index.html) is a good way to visually compare results.
+///
+/// ```rust
+/// use mahler::{Dag, seq};
+/// use dedent::{dedent};
+/// use pretty_assertions::assert_str_eq;
+///
+/// let dag: Dag<char> = seq!('a', 'b', 'c');
+///     assert_str_eq!(
+///         dag.to_string(),
+///         dedent!(
+///             r#"
+///             - a
+///             - b
+///             - c
+///             "#
+///         )
+///     );
+///
+/// let dag: Dag<&str> = seq!("a", "b", "c");
+/// ```
+///
+/// A DAG with two forks
+///
+/// ```text
+///     + - c - d - +
+/// a - +           + - g
+///     + - e - f - +
+/// ```
+///
+/// Is represented as
+/// ```text
+/// - a
+/// + ~ - b
+///     - c
+///   ~ - d
+///     - e
+/// - g
+/// ```
+///
+/// In code
+///
+/// ```rust
+/// use mahler::{Dag, dag, seq};
+/// use dedent::{dedent};
+/// use pretty_assertions::assert_str_eq;
+///
+/// let dag: Dag<char> = seq!('a') + dag!(seq!('b', 'c'), seq!('d', 'e')) + seq!('g');
+///     assert_str_eq!(
+///         dag.to_string(),
+///         dedent!(
+///             r#"
+///             - a
+///             + ~ - b
+///                 - c
+///               ~ - d
+///                 - e
+///             - g
+///             "#
+///         )
+///     );
+/// ```
+///
+/// The recursive nature of this representation allows for complex DAGs to be represented. For
+/// instance, this represents a DAG that contains a fork within one of the branches of another
+/// fork.
+///
+/// ```text
+/// - a
+/// + ~ - b
+///     - c
+///     + ~ - d
+///         - e
+///       ~ - f
+///   ~ - g
+///     - h
+///     - i
+/// - j
+/// - k
+/// ```
+///
+/// In code
+///
+/// ```rust
+/// use mahler::{Dag, dag, seq};
+/// use dedent::{dedent};
+/// use pretty_assertions::assert_str_eq;
+///
+/// let dag: Dag<char> = seq!('a')
+///         + dag!(
+///             seq!('b', 'c') + dag!(seq!('d', 'e'), seq!('f')),
+///             seq!('g', 'h', 'i')
+///         )
+///         + seq!('j', 'k');
+///     assert_str_eq!(
+///         dag.to_string(),
+///         dedent!(
+///             r#"
+///             - a
+///             + ~ - b
+///                 - c
+///                 + ~ - d
+///                     - e
+///                   ~ - f
+///               ~ - g
+///                 - h
+///                 - i
+///             - j
+///             - k
+///             "#
+///         )
+///     );
+/// ```
 pub struct Dag<T> {
     head: Link<T>,
     tail: Link<T>,
 }
 
 impl<T> Default for Dag<T> {
+    /// Create an empty DAG
     fn default() -> Self {
         Dag {
             head: None,
@@ -118,135 +322,18 @@ impl<T> Default for Dag<T> {
     }
 }
 
+impl<T> From<T> for Dag<T> {
+    /// Create a single element `Dag<T>` for any value of type `T`
+    fn from(value: T) -> Self {
+        Dag::seq([value])
+    }
+}
+
 impl<T> Dag<T> {
-    pub fn new() -> Self {
-        Dag::default()
-    }
-
-    /// Check if the DAG is empty
-    ///
-    /// # Example
-    /// ```rust
-    /// use mahler::Dag;
-    ///
-    /// let dag: Dag<i32> = Dag::default();
-    /// assert!(dag.is_empty());
-    /// ```
-    pub fn is_empty(&self) -> bool {
-        self.tail.is_none()
-    }
-
-    pub fn is_forking(&self) -> bool {
-        if let Some(head) = &self.head {
-            matches!(*head.read().unwrap(), Node::Fork { .. })
-        } else {
-            false
-        }
-    }
-
-    /// Link the current Dag to the Dag
-    /// passed as argument
-    pub fn concat(self, other: Dag<T>) -> Self {
-        if let Some(tail_node) = self.tail {
-            match *tail_node.write().unwrap() {
-                Node::Item { ref mut next, .. } => {
-                    *next = other.head;
-                }
-                Node::Join { ref mut next } => {
-                    *next = other.head;
-                }
-                // The tail should never point to a fork
-                Node::Fork { .. } => unreachable!(),
-            }
-        } else {
-            // this dag is empty
-            return other;
-        }
-
-        Dag {
-            head: self.head,
-            tail: other.tail,
-        }
-    }
-
-    /// Return an iterator over the Dag
-    ///
-    /// This function is not public as not to expose the Dag internal implementation
-    /// details
-    fn iter(&self) -> Iter<T> {
-        Iter {
-            stack: vec![(self.head.clone(), Vec::new())],
-        }
-    }
-
-    /// Test if there is some node in the Dag that meets the
-    /// condition given as argument
-    pub fn some(&self, condition: impl Fn(&T) -> bool) -> bool {
-        for node in self.iter() {
-            if let Node::Item { value, .. } = &*node.read().unwrap() {
-                if condition(value) {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
-    /// Test if every node in the DAG meets the condition given
-    /// as argument
-    pub fn every(&self, condition: impl Fn(&T) -> bool) -> bool {
-        for node in self.iter() {
-            if let Node::Item { value, .. } = &*node.read().unwrap() {
-                if !condition(value) {
-                    return false;
-                }
-            }
-        }
-        true
-    }
-
-    /// Create a linear DAG from a list of elements.
-    ///
-    /// # Arguments
-    /// - `elems`: A vector of elements to include in the DAG.
-    ///
-    /// # Returns
-    /// A `Dag` where each element is a node in sequence.
-    ///
-    /// # Example
-    /// ```rust
-    /// use mahler::Dag;
-    ///
-    /// let dag: Dag<i32> = Dag::from_sequence(vec![1, 2, 3]);
-    /// assert_eq!(dag.to_string(), "- 1\n- 2\n- 3");
-    /// ```
-    pub fn from_sequence(elems: impl IntoIterator<Item = impl Into<T>>) -> Dag<T> {
-        let mut iter = elems.into_iter();
-        let mut head: Link<T> = None;
-        let mut tail: Link<T> = None;
-
-        if let Some(value) = iter.next() {
-            head = Node::item(value.into(), None).into_link();
-            tail = head.clone();
-
-            for value in iter {
-                let new_node = Node::item(value.into(), None).into_link();
-                if let Some(tail_node) = tail {
-                    if let Node::Item { ref mut next, .. } = *tail_node.write().unwrap() {
-                        *next = new_node.clone();
-                    }
-                }
-                tail = new_node;
-            }
-        }
-
-        Dag { head, tail }
-    }
-
     /// Create a forking DAG from a list of branches
     ///
     /// # Arguments
-    /// - `branches`: a vector of Dag instaances to use as branches
+    /// - `branches`: an iterable of Dag instances to use as branches
     ///
     /// # Returns
     /// A new forking `Dag` where each branch corresponds to one of the DAGs
@@ -256,12 +343,12 @@ impl<T> Dag<T> {
     /// ```rust
     /// use mahler::Dag;
     ///
-    /// let br1: Dag<i32> = Dag::from_sequence([1, 2, 3]);
-    /// let br2: Dag<i32> = Dag::from_sequence([4, 5, 6]);
-    /// let dag: Dag<i32> = Dag::from_branches([br1, br2]);
+    /// let br1: Dag<i32> = Dag::seq([1, 2, 3]);
+    /// let br2: Dag<i32> = Dag::seq([4, 5, 6]);
+    /// let dag: Dag<i32> = Dag::new([br1, br2]);
     /// assert_eq!(dag.to_string(), "+ ~ - 1\n    - 2\n    - 3\n  ~ - 4\n    - 5\n    - 6");
     /// ```
-    pub fn from_branches(branches: impl IntoIterator<Item = Dag<T>>) -> Dag<T> {
+    pub fn new(branches: impl IntoIterator<Item = Dag<T>>) -> Dag<T> {
         // Filter out any branches with an empty head node
         let mut branches: Vec<Dag<T>> = branches
             .into_iter()
@@ -297,7 +384,7 @@ impl<T> Dag<T> {
 
         // Return an empty DAG if no branches remain
         if next.is_empty() {
-            return Dag::new();
+            return Dag::default();
         }
 
         Dag {
@@ -305,12 +392,133 @@ impl<T> Dag<T> {
             tail,
         }
     }
+
+    /// Create a linear DAG (a linked list) from a sequence of elements
+    ///
+    /// # Arguments
+    /// - `elems`: an iterable of elements to include in the DAG.
+    ///
+    /// # Returns
+    /// A `Dag` where each element is a node in sequence.
+    ///
+    /// # Example
+    /// ```rust
+    /// use mahler::Dag;
+    ///
+    /// let dag: Dag<i32> = Dag::seq(vec![1, 2, 3]);
+    /// assert_eq!(dag.to_string(), "- 1\n- 2\n- 3");
+    /// ```
+    pub fn seq(elems: impl IntoIterator<Item = impl Into<T>>) -> Dag<T> {
+        let mut iter = elems.into_iter();
+        let mut head: Link<T> = None;
+        let mut tail: Link<T> = None;
+
+        if let Some(value) = iter.next() {
+            head = Node::item(value.into(), None).into_link();
+            tail = head.clone();
+
+            for value in iter {
+                let new_node = Node::item(value.into(), None).into_link();
+                if let Some(tail_node) = tail {
+                    if let Node::Item { ref mut next, .. } = *tail_node.write().unwrap() {
+                        *next = new_node.clone();
+                    }
+                }
+                tail = new_node;
+            }
+        }
+
+        Dag { head, tail }
+    }
+
+    /// Return `true` if the DAG is empty
+    ///
+    /// # Example
+    /// ```rust
+    /// use mahler::Dag;
+    ///
+    /// let dag: Dag<i32> = Dag::default();
+    /// assert!(dag.is_empty());
+    /// ```
+    pub fn is_empty(&self) -> bool {
+        self.tail.is_none()
+    }
+
+    pub(crate) fn is_forking(&self) -> bool {
+        if let Some(head) = &self.head {
+            matches!(*head.read().unwrap(), Node::Fork { .. })
+        } else {
+            false
+        }
+    }
+
+    /// Join two DAGs
+    pub fn concat(self, other: impl Into<Dag<T>>) -> Self {
+        let other = other.into();
+        if let Some(tail_node) = self.tail {
+            match *tail_node.write().unwrap() {
+                Node::Item { ref mut next, .. } => {
+                    *next = other.head;
+                }
+                Node::Join { ref mut next } => {
+                    *next = other.head;
+                }
+                // The tail should never point to a fork
+                Node::Fork { .. } => unreachable!(),
+            }
+        } else {
+            // this dag is empty
+            return other;
+        }
+
+        Dag {
+            head: self.head,
+            tail: other.tail,
+        }
+    }
+
+    /// Return an iterator over the DAG
+    ///
+    /// This function is not public as not to expose the Dag internal implementation
+    /// details
+    fn iter(&self) -> Iter<T> {
+        Iter {
+            stack: vec![(self.head.clone(), Vec::new())],
+        }
+    }
+
+    /// Return `true` if there is any node in the DAG that meets the given condition
+    pub fn any(&self, condition: impl Fn(&T) -> bool) -> bool {
+        for node in self.iter() {
+            if let Node::Item { value, .. } = &*node.read().unwrap() {
+                if condition(value) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Return `true` if the given condition is met for every node in the DAG
+    pub fn all(&self, condition: impl Fn(&T) -> bool) -> bool {
+        for node in self.iter() {
+            if let Node::Item { value, .. } = &*node.read().unwrap() {
+                if !condition(value) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
 }
 
-impl<T> Add for Dag<T> {
+impl<T, R> Add<R> for Dag<T>
+where
+    R: Into<Dag<T>>,
+{
     type Output = Self;
 
-    fn add(self, other: Self) -> Self {
+    fn add(self, other: R) -> Self {
         self.concat(other)
     }
 }
@@ -414,26 +622,56 @@ impl<T: fmt::Display> fmt::Display for Dag<T> {
     }
 }
 
+/// Construct a linear DAG
+///
+/// ```rust
+/// use mahler::{Dag, seq};
+///
+/// // Construct a DAG of i32
+/// let lli: Dag<i32> = seq!(1, 2, 3);
+///
+/// // Construct a DAG of str
+/// let lls: Dag<&str> = seq!("a", "b", "c");
+/// ```
 #[macro_export]
 macro_rules! seq {
     ($($value:expr),* $(,)?) => {
-        Dag::from_sequence([$($value),*])
+        Dag::seq([$($value),*])
     };
 }
 
+/// Construct a branching DAG
+///
+/// ```rust
+/// use mahler::{Dag, seq, dag};
+///
+/// // Construct a DAG of i32 with two branches
+/// let dag: Dag<i32> = dag!(
+///     seq!(1, 2, 3),
+///     seq!(4, 5, 6)
+/// );
+/// ```
 #[macro_export]
 macro_rules! dag {
     ($($branch:expr),* $(,)?) => {
-        Dag::from_branches([$($branch),*])
+        Dag::new([$($branch),*])
     };
 }
 
+/// Construct a branching DAG with single item branches
+///
+/// ```rust
+/// use mahler::{Dag, par};
+///
+/// // Construct a DAG of i32 with three branches of one element each
+/// let dag: Dag<i32> = par!(1, 2, 3);
+/// ```
 #[macro_export]
 macro_rules! par {
     // If the input is a list of values (strings, etc.), convert each to a single-element Dag
     ($($value:expr),* $(,)?) => {
-        Dag::from_branches([
-            $(Dag::from_sequence([$value])),*
+        Dag::new([
+            $(Dag::seq([$value])),*
         ])
     }
 }
@@ -444,8 +682,15 @@ pub(crate) enum ExecutionStatus {
 }
 
 #[async_trait]
+/// Utility trait for executable DAGs
+///
+/// This is different from [`crate::task::Task`]. Workflow items implementing this trait can be
+/// executed as part of a DAG (workflow) execution.
 pub trait Task {
+    /// The input type for the Task
     type Input;
+
+    /// The resulting changes introduced by the task
     type Changes;
     type Error;
 
@@ -457,6 +702,11 @@ where
     T: Task + Clone,
     T::Input: Clone,
 {
+    /// Run the DAG
+    ///
+    /// This is only available for DAG items that implement Task
+    ///
+    /// NOTE: this is not public to avoid exposing external crate types
     pub(crate) async fn execute(
         self,
         input: &Arc<tokio::sync::RwLock<T::Input>>,
@@ -508,6 +758,7 @@ where
             let mut current = node;
             let mut errors = Vec::new();
 
+            // Try to run nodes as a sequence
             while let Some(node_rc) = current {
                 if interrupt.is_set() {
                     return Err(InnerError::Interrupted);
@@ -527,14 +778,19 @@ where
                 };
 
                 match node {
+                    // If a Item node is found, just run the task and continue with tne next node
                     InnerNode::Item { task, next } => {
                         let value = {
+                            // Read the up-to-date shared state
                             let guard = input.read().await;
                             guard.clone()
                         };
 
                         match run_task(task, &value, interrupt).await {
                             Ok(changes) => {
+                                // Send task changes back to the channel, it is the
+                                // receiver responsibility to merge changes back on the shared
+                                // state
                                 if channel.send(changes).await.is_err() {
                                     return Err(InnerError::Interrupted);
                                 }
@@ -548,6 +804,8 @@ where
 
                         current = next;
                     }
+                    // If a fork node is found, run each branch until encoutering the exit `Join`
+                    // node and continue there
                     InnerNode::Fork { branches } => {
                         let mut futures = Vec::new();
 
@@ -555,6 +813,9 @@ where
                             futures.push(exec_node(branch, input, channel, interrupt));
                         }
 
+                        // Join the futures from the individual branches
+                        // NOTE: at some point we might want to spawn new tokio tasks
+                        // for each future
                         let results = futures::future::join_all(futures).await;
 
                         let mut join_next: Link<T> = None;
@@ -576,11 +837,11 @@ where
                             return Err(InnerError::Failure(errors));
                         }
 
-                        // After all branches, continue at join's next
+                        // After all branches, continue after the Join
                         current = join_next;
                     }
+                    // If a join node is found, just return its continuation
                     InnerNode::Join { next } => {
-                        // Reached a Join: stop branch and return the Join's next node
                         return Ok(next);
                     }
                 }
@@ -629,7 +890,7 @@ mod tests {
 
     #[test]
     fn test_empty_dag() {
-        let dag: Dag<i32> = Dag::new();
+        let dag: Dag<i32> = Dag::default();
         assert!(dag.head.is_none());
         assert!(dag.tail.is_none());
     }
@@ -637,7 +898,7 @@ mod tests {
     #[test]
     fn test_dag_from_list() {
         let elements = vec![1, 2, 3, 4];
-        let dag = Dag::<i32>::from_sequence(elements.clone());
+        let dag = Dag::<i32>::seq(elements.clone());
         let mut head = dag.head;
 
         for &value in &elements {
@@ -680,7 +941,7 @@ mod tests {
     #[test]
     fn test_iterate_linear_graph() {
         let elements = vec![1, 2, 3];
-        let dag = Dag::<i32>::from_sequence(elements.clone());
+        let dag = Dag::<i32>::seq(elements.clone());
 
         // Collect the values in the order they are returned by the iterator
         let mut result = Vec::new();
@@ -719,7 +980,7 @@ mod tests {
 
     #[test]
     fn test_empty_dag_string_representation() {
-        let dag: Dag<char> = Dag::new();
+        let dag: Dag<char> = Dag::default();
         assert_eq!(dag.to_string(), "");
     }
 

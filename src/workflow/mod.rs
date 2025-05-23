@@ -1,3 +1,5 @@
+//! Types and utilities to generate and execute task Workflows
+
 use async_trait::async_trait;
 use json_patch::{Patch, PatchOperation};
 use serde_json::Value;
@@ -22,6 +24,9 @@ pub use dag::*;
 pub(crate) use interrupt::*;
 
 #[derive(Hash)]
+/// Unique reqpresentation of a task acting on a specific path and system state.
+///
+/// The hash of this structure is used as the [`WorkUnit`] id
 struct WorkUnitId<'s> {
     /// The task id
     task_id: String,
@@ -32,31 +37,32 @@ struct WorkUnitId<'s> {
 }
 
 #[derive(Clone)]
+/// Utility type to encode a single work unit in a workflow
 pub(crate) struct WorkUnit {
-    /**
-     * Unique id for the action. This is calculated by
-     * hashing the .
-     */
+    /// Unique id for the action. This is calculed by hashing a WorkUnitId
     pub id: u64,
 
-    /**
-     * The task to execute
-     *
-     * Only atomic tasks should be added to a worflow item
-     */
+    /// The action to execute
+    ///
+    /// Only atomic tasks can be added to a worflow item
     action: Action,
 
-    /**
-     * The output of the task during planning
-     */
+    /// The output of the task during planning
+    ///
+    /// This will be used at runtime to compare to the result of [dry_run](`crate::task::Action::dry_run`)
+    /// and abort the execution if that fails
     output: Vec<PatchOperation>,
 }
 
 impl WorkUnit {
+    /// Create a new WorkUnit
     pub fn new(id: u64, action: Action, output: Vec<PatchOperation>) -> Self {
         Self { id, action, output }
     }
 
+    /// Calculate the id of a given action and state value.
+    ///
+    /// Use this before calling [`new`]
     pub fn new_id(task: &Action, state: &Value) -> u64 {
         let pointer = task.context().path.as_ref();
 
@@ -109,13 +115,39 @@ impl Task for WorkUnit {
 }
 
 #[derive(Default, Clone)]
+/// A Workflow is the type returned by the [Worker](`crate::worker::Worker`) planning step.
+///
+/// Internally a Workflow is represented by a [DAG](`Dag`), where each work unit is an atomic
+/// [Task](`crate::task::Task`) selected by the planner, and includes the result of the task
+/// evaluation during planning.
+///
+/// The Workflow is executed by the Worker in the following way:
+/// - Workflow DAG branches are executed concurrently
+/// - When executing each node in the DAG, the task is first tested on the current state, and its
+///   results are compared to the results during planning.
+///     - If the result is different, a requirement for executing the task has changed and the full
+///       workflow execution is terminated.
+///     - Otherwise, the effectful part of the task is executed, communicating changes back to the
+///       `Worker`.
+/// - If any task returns an error, the workflow execution is interrupted.
+///
+/// Workflow implements [`Display`], using the [string representation defined for
+/// Dag](`Dag#string-representation-of-a-dag`), where each task is rendered from its provided
+/// [description](`crate::task::Job::with_description`).
 pub struct Workflow {
+    /// Internal graph for this Workflow
     pub(crate) dag: Dag<WorkUnit>,
+
+    /// List of changes not yet applied
     pub(crate) pending: Vec<PatchOperation>,
 }
 
-pub enum WorkflowStatus {
+/// Runtime status of a workflow execution
+pub(crate) enum WorkflowStatus {
+    /// The workflow execution terminated successfully
     Completed,
+
+    /// The workflow execution was interrupted by user request
     Interrupted,
 }
 
@@ -133,6 +165,7 @@ impl Workflow {
         &self.dag
     }
 
+    /// Return `true` if the Workflow's internal graph has no elements
     pub fn is_empty(&self) -> bool {
         self.dag.is_empty()
     }

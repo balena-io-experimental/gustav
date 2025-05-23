@@ -23,6 +23,7 @@ use crate::system::System;
 pub(crate) use context::*;
 pub(crate) use into_result::*;
 
+pub use context::FromContext;
 pub use description::*;
 pub use effect::*;
 pub use errors::*;

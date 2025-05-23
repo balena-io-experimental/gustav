@@ -8,7 +8,6 @@ description = "An automated job orchestration library to build and execute dynam
 
 default = []
 logging = ["tracing-subscriber", "log"]
-log = ["dep:log"]
 
 [dependencies]
 anyhow = "1.0.97"
@@ -37,6 +36,8 @@ tracing-subscriber = { version = "0.3.19", default-features = false, optional = 
 ] }
 
 [dev-dependencies]
+# configure mahler with the logging feature to ensure documentation tests pass
+mahler = { path = ".", features = ["logging"] }
 tracing-subscriber = { version = "0.3.19", default-features = false, features = [
   "ansi",
   "registry",
@@ -46,6 +47,13 @@ tracing-subscriber = { version = "0.3.19", default-features = false, features = 
 dedent = "0.1.1"
 env_logger = "0.11.8"
 log = "0.4.25"
-tokio = { version = "1.36.0", features = ["rt", "time"] }
+tokio = { version = "1.36.0", features = ["rt-multi-thread", "time"] }
 pretty_assertions = "1.4.1"
 tokio-test = "0.4.4"
+
+# docs.rs-specific configuration
+[package.metadata.docs.rs]
+# document all features
+all-features = true
+# defines the configuration attribute `docsrs`
+rustdoc-args = ["--cfg", "docsrs"]

@@ -10,6 +10,38 @@ mod de;
 mod error;
 
 #[derive(Debug)]
+/// Extracts arguments from the Task path and parses them using [`serde`]
+///
+/// # Example
+///
+/// One `Args` can extract multiple arguments. A handler should not be given more than one
+/// `Args` argument.
+///
+/// ```rust,no_run
+/// use mahler::{
+///     extract::Args,
+///     task::{Handler, update},
+///     worker::{Worker, Ready}
+/// };
+/// use serde::{Serialize, Deserialize};
+///
+/// #[derive(Serialize,Deserialize)]
+/// struct SystemState {/* ... */};
+///
+/// fn install_service_for_release(Args((release_id, service_name)): Args<(String, String)>) {
+///     // ...
+/// }
+///
+/// let worker: Worker<SystemState, Ready> = Worker::new()
+///     .job("/releases/{release_id}/services/{service_name}", update(install_service_for_release))
+///     .initial_state(SystemState {/* ... */})
+///     .unwrap();
+/// ```
+///
+/// # Errors
+///
+/// If the path arguments cannot be deserialized into the target type, extraction will fail and an
+/// error will be logged by the [Worker](`crate::worker::Worker`).
 pub struct Args<T>(pub T);
 
 impl<T: DeserializeOwned + Send> FromContext for Args<T> {

@@ -6,7 +6,7 @@ use tokio::time::sleep;
 
 use mahler::extract::{Args, Target, View};
 use mahler::task::prelude::*;
-use mahler::worker::{Worker, init_logging};
+use mahler::worker::{init_logging, Worker};
 
 // The state model needs to be Serializable and Deserializable
 // since the library uses JSON internally to access parts

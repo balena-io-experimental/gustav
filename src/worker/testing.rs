@@ -12,9 +12,12 @@ use crate::{task::Task, workflow::Workflow};
 
 #[derive(Debug, Error)]
 #[error("workflow not found")]
+/// A workflow could not be found
+///
+/// This is returned by [`Worker::find_workflow`] when used on testing.
 pub struct NotFound;
 
-pub async fn find_workflow<I>(
+async fn find_workflow<I>(
     system: &Arc<RwLock<System>>,
     planner: &Planner,
     tgt: I,
@@ -37,10 +40,8 @@ where
 }
 
 impl<O, I> Worker<O, Ready, I> {
-    /// Find a workflow within the context of the worker
-    ///
-    /// This function is only meant for testing and is not available
-    /// if debug_assertions is disabled.
+    #[cfg_attr(docsrs, doc(cfg(debug_assertions)))]
+    /// Find a workflow for testing purposes within the context of the worker
     ///
     /// # Example
     /// ```rust
@@ -74,6 +75,10 @@ impl<O, I> Worker<O, Ready, I> {
     /// assert_eq!(workflow.to_string(), expected.to_string());
     /// # })
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if any error happens during planning
     pub async fn find_workflow(&self, tgt: I) -> Result<Workflow, NotFound>
     where
         I: Serialize + DeserializeOwned,
@@ -118,10 +123,8 @@ impl<O, I> Worker<O, Ready, I> {
         Ok(())
     }
 
+    #[cfg_attr(docsrs, doc(cfg(debug_assertions)))]
     /// Test a task within the context of the worker domain
-    ///
-    /// This function is only meant for testing and is not available
-    /// if debug_assertions is disabled.
     ///
     /// # Example
     /// ```rust
@@ -157,6 +160,9 @@ impl<O, I> Worker<O, Ready, I> {
     /// assert_eq!(worker.run_task(plus_one.with_target(2)).await.unwrap(), 2);
     /// # })
     /// ```
+    ///
+    /// # Panics
+    /// This function will panic if a sewrialization or internal error happens during execution
     pub async fn run_task(&self, mut task: Task) -> Result<O, task::Error>
     where
         O: Serialize + DeserializeOwned,

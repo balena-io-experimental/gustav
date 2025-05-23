@@ -21,8 +21,16 @@ where
     }
 }
 
+impl From<()> for Effect<Patch, Error, ()> {
+    fn from(value: ()) -> Effect<Patch, Error, ()> {
+        Effect::of(value)
+            .with_io(|value| async move { Ok(value) })
+            .map(|_| Patch(vec![]))
+    }
+}
+
 /// Allow tasks to return a value that implements
-/// IntoResult<Patch>, e.g. View
+/// `IntoResult<Patch>`, e.g. View
 impl<I> From<I> for Effect<Patch, Error, I>
 where
     I: IntoResult<Patch> + Send + 'static,
@@ -32,8 +40,8 @@ where
     }
 }
 
-/// Implement Into<Effect> for any effect that has an IntoResult as the output. This means that, for
-/// instance, Effect<View<T>> implements Into<Effect>, so effects can use extractors to interact
+/// Implement `Into<Effect>` for any effect that has an `IntoResult` as the output. This means that, for
+/// instance, `Effect<View<T>>` implements `Into<Effect>`, so effects can use extractors to interact
 /// with the state
 impl<I, E> From<Effect<I, E>> for Effect<Patch, Error, I>
 where
@@ -46,7 +54,7 @@ where
     }
 }
 
-// Allow tasks to return a pure Vec<Task>
+// Allow tasks to return a pure `Vec<Task>`
 // and this will convert them into an effect
 impl From<Vec<Task>> for Effect<Vec<Task>, Error> {
     fn from(vec: Vec<Task>) -> Effect<Vec<Task>, Error> {

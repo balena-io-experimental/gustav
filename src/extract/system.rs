@@ -5,7 +5,39 @@ use crate::errors::ExtractionError;
 use crate::system::System as SystemState;
 use crate::task::{Context, FromSystem};
 
-/// Extracts the root of the system state
+/// Extracts the global system state managed by the [Worker](`crate::worker::Worker`)
+///
+/// This extractor is useful for Jobs that need to *peek* into another part of the system state
+/// outside the scope given by the assigned path. Note that using this extractor makes the Job not
+/// parallelizable.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use mahler::{
+///     extract::System,
+///     task::{Handler, update},
+///     worker::{Worker, Ready}
+/// };
+/// use serde::{Serialize, Deserialize};
+///
+/// #[derive(Serialize,Deserialize)]
+/// struct SystemState {/* ... */};
+///
+/// fn accessing_global_state(System(state): System<SystemState>) {
+///     // ...
+/// }
+///
+/// let worker: Worker<SystemState, Ready> = Worker::new()
+///     .job("/{foo}/{bar}", update(accessing_global_state))
+///     .initial_state(SystemState {/* ... */})
+///     .unwrap();
+/// ```
+///
+/// # Errors
+///
+/// Initializing the extractor will fail if the worker state cannot be deserialized into type
+/// `<S>`.
 #[derive(Debug, Clone)]
 pub struct System<S>(pub S);
 
