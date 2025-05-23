@@ -535,8 +535,8 @@ mod tests {
 
         // We expect a linear DAG with two tasks
         let expected: Dag<&str> = seq!(
-            "gustav::planner::tests::plus_one()",
-            "gustav::planner::tests::plus_one()"
+            "mahler::planner::tests::plus_one()",
+            "mahler::planner::tests::plus_one()"
         );
 
         assert_eq!(workflow.to_string(), expected.to_string(),);
@@ -574,8 +574,8 @@ mod tests {
 
         // We expect a linear DAG with two tasks
         let expected: Dag<&str> = seq!(
-            "gustav::planner::tests::plus_one()",
-            "gustav::planner::tests::plus_one()"
+            "mahler::planner::tests::plus_one()",
+            "mahler::planner::tests::plus_one()"
         );
 
         assert_eq!(workflow.to_string(), expected.to_string(),);
@@ -605,11 +605,11 @@ mod tests {
 
         // We expect counters to be updated in parallel
         let expected: Dag<&str> = par!(
-            "gustav::planner::tests::plus_one(/counters/one)",
-            "gustav::planner::tests::plus_one(/counters/two)",
+            "mahler::planner::tests::plus_one(/counters/one)",
+            "mahler::planner::tests::plus_one(/counters/two)",
         ) + par!(
-            "gustav::planner::tests::plus_one(/counters/one)",
-            "gustav::planner::tests::plus_one(/counters/two)",
+            "mahler::planner::tests::plus_one(/counters/one)",
+            "mahler::planner::tests::plus_one(/counters/two)",
         );
 
         assert_eq!(workflow.to_string(), expected.to_string(),);
@@ -640,12 +640,12 @@ mod tests {
         // We expect a parallel dag with two tasks on each branch
         let expected: Dag<&str> = dag!(
             seq!(
-                "gustav::planner::tests::plus_one(/counters/one)",
-                "gustav::planner::tests::plus_one(/counters/one)",
+                "mahler::planner::tests::plus_one(/counters/one)",
+                "mahler::planner::tests::plus_one(/counters/one)",
             ),
             seq!(
-                "gustav::planner::tests::plus_one(/counters/two)",
-                "gustav::planner::tests::plus_one(/counters/two)",
+                "mahler::planner::tests::plus_one(/counters/two)",
+                "mahler::planner::tests::plus_one(/counters/two)",
             )
         );
 
@@ -677,9 +677,9 @@ mod tests {
 
         // We expect a linear DAG with two tasks
         let expected: Dag<&str> = seq!(
-            "gustav::planner::tests::plus_one(/counters/one)",
-            "gustav::planner::tests::plus_one(/counters/one)",
-            "gustav::planner::tests::plus_one(/counters/one)",
+            "mahler::planner::tests::plus_one(/counters/one)",
+            "mahler::planner::tests::plus_one(/counters/one)",
+            "mahler::planner::tests::plus_one(/counters/one)",
         );
 
         assert_eq!(workflow.to_string(), expected.to_string(),);

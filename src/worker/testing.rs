@@ -44,10 +44,10 @@ impl<O, I> Worker<O, Ready, I> {
     ///
     /// # Example
     /// ```rust
-    /// use gustav::task::{self, prelude::*};
-    /// use gustav::extract::{View, Target};
-    /// use gustav::worker::Worker;
-    /// use gustav::{Dag, seq};
+    /// use mahler::task::{self, prelude::*};
+    /// use mahler::extract::{View, Target};
+    /// use mahler::worker::Worker;
+    /// use mahler::{Dag, seq};
     ///
     /// fn plus_one(mut counter: View<i32>, Target(tgt): Target<i32>) -> IO<i32> {
     ///    if *counter < tgt {
@@ -128,9 +128,9 @@ impl<O, I> Worker<O, Ready, I> {
     /// use std::time::Duration;
     /// use tokio::time::sleep;
     ///
-    /// use gustav::task::{self, prelude::*};
-    /// use gustav::extract::{View, Target};
-    /// use gustav::worker::Worker;
+    /// use mahler::task::{self, prelude::*};
+    /// use mahler::extract::{View, Target};
+    /// use mahler::worker::Worker;
     ///
     /// fn plus_one(mut counter: View<i32>, Target(tgt): Target<i32>) -> IO<i32> {
     ///    if *counter < tgt {
@@ -295,9 +295,9 @@ mod tests {
 
         // We expect a linear DAG with three tasks
         let expected: Dag<&str> = par!(
-            "gustav::worker::testing::tests::plus_one(/one)",
-            "gustav::worker::testing::tests::plus_one(/two)"
-        ) + seq!("gustav::worker::testing::tests::plus_one(/one)",);
+            "mahler::worker::testing::tests::plus_one(/one)",
+            "mahler::worker::testing::tests::plus_one(/two)"
+        ) + seq!("mahler::worker::testing::tests::plus_one(/one)",);
 
         assert_eq!(workflow.to_string(), expected.to_string(),);
     }

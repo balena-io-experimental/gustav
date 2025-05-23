@@ -127,7 +127,7 @@ impl<T> Dag<T> {
     ///
     /// # Example
     /// ```rust
-    /// use gustav::Dag;
+    /// use mahler::Dag;
     ///
     /// let dag: Dag<i32> = Dag::default();
     /// assert!(dag.is_empty());
@@ -215,7 +215,7 @@ impl<T> Dag<T> {
     ///
     /// # Example
     /// ```rust
-    /// use gustav::Dag;
+    /// use mahler::Dag;
     ///
     /// let dag: Dag<i32> = Dag::from_sequence(vec![1, 2, 3]);
     /// assert_eq!(dag.to_string(), "- 1\n- 2\n- 3");
@@ -254,7 +254,7 @@ impl<T> Dag<T> {
     ///
     /// # Example
     /// ```rust
-    /// use gustav::Dag;
+    /// use mahler::Dag;
     ///
     /// let br1: Dag<i32> = Dag::from_sequence([1, 2, 3]);
     /// let br2: Dag<i32> = Dag::from_sequence([4, 5, 6]);
@@ -319,7 +319,7 @@ impl<T> Add for Dag<T> {
 ///
 /// # Example
 /// ```rust
-/// use gustav::{Dag, dag, seq};
+/// use mahler::{Dag, dag, seq};
 ///
 /// let dag: Dag<char> = dag!(seq!('A', 'B'), seq!('C', 'D')) + seq!('E');
 /// assert_eq!(

@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context as AnyhowCtx};
 use bollard::container::{CreateContainerOptions, StartContainerOptions};
 use bollard::secret::{ContainerInspectResponse, ContainerState, ContainerStateStatusEnum};
 use futures_util::stream::StreamExt;
-use gustav::worker::{Ready, Worker};
+use mahler::worker::{Ready, Worker};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
@@ -10,8 +10,8 @@ use thiserror::Error;
 use bollard::image::CreateImageOptions;
 use bollard::Docker;
 
-use gustav::extract::{Args, Pointer, Res, System, Target, View};
-use gustav::task::prelude::*;
+use mahler::extract::{Args, Pointer, Res, System, Target, View};
+use mahler::task::prelude::*;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Default)]
 pub enum ServiceStatus {
@@ -672,8 +672,8 @@ pub fn create_worker(project: Project) -> Worker<Project, Ready, TargetProject> 
 #[cfg(test)]
 mod tests {
     use bollard::container::{ListContainersOptions, RemoveContainerOptions};
-    use gustav::worker::SeekStatus;
-    use gustav::{seq, Dag};
+    use mahler::worker::SeekStatus;
+    use mahler::{seq, Dag};
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tracing_subscriber::fmt::format::FmtSpan;

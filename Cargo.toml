@@ -1,5 +1,5 @@
 [package]
-name = "gustav"
+name = "mahler"
 version = "0.14.0"
 edition = "2021"
 description = "An automated job orchestration library to build and execute dynamic workflows"
@@ -8,13 +8,14 @@ description = "An automated job orchestration library to build and execute dynam
 
 default = []
 logging = ["tracing-subscriber", "log"]
+log = ["dep:log"]
 
 [dependencies]
 anyhow = "1.0.97"
 json-patch = "4"
 jsonptr = "0.7.1"
 matchit = "0.8.4"
-serde = { version = "1.0.197" }
+serde = "1.0.197"
 serde_json = "1.0.120"
 thiserror = "2"
 tokio = { version = "1.43.0", default-features = false, features = [

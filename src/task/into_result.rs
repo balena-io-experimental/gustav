@@ -21,6 +21,14 @@ where
     }
 }
 
+impl From<()> for Effect<Patch, Error, ()> {
+    fn from(value: ()) -> Effect<Patch, Error, ()> {
+        Effect::of(value)
+            .with_io(|value| async move { Ok(value) })
+            .map(|_| Patch(vec![]))
+    }
+}
+
 /// Allow tasks to return a value that implements
 /// IntoResult<Patch>, e.g. View
 impl<I> From<I> for Effect<Patch, Error, I>
