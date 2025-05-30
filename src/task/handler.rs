@@ -1,8 +1,9 @@
 use json_patch::Patch;
 use serde::Serialize;
 
+use super::from_system::FromSystem;
 use super::{Action, Context, Effect, Error, Method, Task};
-use crate::system::{FromSystem, System};
+use crate::system::System;
 
 pub trait Handler<T, O, I = O>: Clone + Sync + Send + 'static {
     fn call(&self, system: &System, context: &Context) -> Effect<O, Error, I>;
@@ -24,8 +25,11 @@ pub trait Handler<T, O, I = O>: Clone + Sync + Send + 'static {
 
     /// Create a task from the handler with a specific target
     ///
+    /// This is a convenience method that is equivalent to calling
+    /// `handler.into_task().with_target(target)`.
+    ///
     /// Important: This function will panic if serialization of the target into JSON fails
-    /// Use `into_task().try_target()` if you want to handle the error. This is done for convenience as
+    /// Use `Task::try_target` if you want to handle the error. This is done for convenience as
     /// serialization errors should be rare and this makes the code more concise.
     fn with_target<S: Serialize>(self, target: S) -> Task {
         self.into_task().with_target(target)
@@ -33,8 +37,8 @@ pub trait Handler<T, O, I = O>: Clone + Sync + Send + 'static {
 
     /// Create a task from the handler with a specific path argument
     ///
-    /// This is a convenience method and it is equivalent to calling
-    /// handler.into_task().with_path();
+    /// This is a convenience method that is equivalent to calling
+    /// `handler.into_task().with_path()`.
     fn with_arg(self, key: impl AsRef<str>, value: impl Into<String>) -> Task {
         self.into_task().with_arg(key, value)
     }

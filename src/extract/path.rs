@@ -1,9 +1,33 @@
 use std::fmt::{Display, Formatter};
 
 use crate::errors::ExtractionError;
-use crate::system::{FromSystem, System};
-use crate::task::{Context, FromContext};
+use crate::system::System;
+use crate::task::{Context, FromContext, FromSystem};
 
+/// Extracts the full path that the Task is being applied to
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use mahler::{
+///     extract::Path,
+///     task::{Handler, update},
+///     worker::{Worker, Ready}
+/// };
+/// use serde::{Serialize, Deserialize};
+///
+/// #[derive(Serialize,Deserialize)]
+/// struct SystemState {/* ... */};
+///
+/// fn foo_bar(Path(path): Path) {
+///     // ...
+/// }
+///
+/// let worker: Worker<SystemState, Ready> = Worker::new()
+///     .job("/{foo}/{bar}", update(foo_bar))
+///     .initial_state(SystemState {/* ... */})
+///     .unwrap();
+/// ```
 pub struct Path(pub String);
 
 impl FromContext for Path {

@@ -1,7 +1,4 @@
-//! Worker module for orchestrating system workflows toward a target state.
-//!
-//! This module provides a `Worker` abstraction that manages the lifecycle of reaching a desired state
-//! through workflows, handling retries, failures, cancellations, and live state tracking.
+//! Automated planning and execution of task workflows
 
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -28,6 +25,7 @@ mod testing;
 pub use testing::*;
 
 #[cfg(feature = "logging")]
+#[cfg_attr(docsrs, doc(cfg(feature = "logging")))]
 pub use logging::init as init_logging;
 
 use crate::errors::{IOError, InternalError, SerializationError};
@@ -37,48 +35,53 @@ use crate::task::{Error as TaskError, Job};
 use crate::workflow::{channel, AggregateError, Interrupt, Sender, WorkflowStatus};
 
 pub mod prelude {
+    //! Types and traits for setting up a Worker
     pub use super::SeekTarget;
 }
 
+/// A panic happened in the Worker runtime
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct Panicked(#[from] tokio::task::JoinError);
 
+/// Unrecoverable error during the worker runtime
 #[derive(Debug, Error)]
 pub enum FatalError {
     #[error(transparent)]
-    /// An eror happened while serializing/deserializing
-    /// the worker input types
+    /// Failed to serialize or deserialize the Worker current/target state
     Serialization(#[from] SerializationError),
 
     #[error(transparent)]
-    /// A panic happened within the worker execution, this
-    /// most likely mean there is an uncaught error in a task
+    /// A panic happened in the Worker runtime
+    ///
+    /// This most likely means that there is an uncaught panic in a task
     Panic(#[from] Panicked),
 
     #[error(transparent)]
-    /// An error happened with a task during planning. This most
-    /// likely mean there is a bug in a task. This error will
-    /// only be returned if debug_assertions are set. Otherwise
+    /// An error happened with a task during planning
+    ///
+    /// This most likely means there is a bug in a task. This error will
+    /// only be returned if `debug_assertions` are set. Otherwise
     /// task errors are ignored by the planner
     Planning(#[from] TaskError),
 
     #[error(transparent)]
     /// An internal error occured during the worker operation
-    /// this is probably a bug
+    ///
+    /// This is probably a bug with mahler and it should be reported
     Internal(#[from] InternalError),
 }
 
 #[derive(Debug)]
+/// Exit status from [`Worker::seek_target`]
 pub enum SeekStatus {
-    /// Worker has reached the target state
-    TargetReached,
-    /// Workflow not found
+    /// The worker has reached the target state
+    Success,
+    /// No workflow was found for the given target
     NotFound,
     /// Worker interrupted by user request
     Interrupted,
-    /// Worker execution was terminated due to some unexpected
-    /// error during runtime
+    /// An error happened while executing the workflow.
     Aborted(Vec<IOError>),
 }
 
@@ -86,7 +89,7 @@ impl PartialEq for SeekStatus {
     fn eq(&self, other: &Self) -> bool {
         matches!(
             (self, other),
-            (SeekStatus::TargetReached, SeekStatus::TargetReached)
+            (SeekStatus::Success, SeekStatus::Success)
                 | (SeekStatus::NotFound, SeekStatus::NotFound)
                 | (SeekStatus::Interrupted, SeekStatus::Interrupted)
         )
@@ -94,13 +97,16 @@ impl PartialEq for SeekStatus {
 }
 
 #[async_trait]
+/// Helper trait to chain worker calls
 pub trait SeekTarget<O, I = O> {
-    async fn seek_target(self, tgt: I) -> Result<Worker<O, Idle, I>, FatalError>;
+    /// Look for a workflow for the given target and execute it
+    async fn seek_target(self, tgt: I) -> Result<Worker<O, Ready, I>, FatalError>;
 }
 
 impl Eq for SeekStatus {}
 
 #[derive(Default)]
+/// Helper type to interrupt the Worker on Drop
 struct AutoInterrupt(Interrupt);
 
 impl Drop for AutoInterrupt {
@@ -110,13 +116,27 @@ impl Drop for AutoInterrupt {
     }
 }
 
+#[derive(Debug, Clone)]
+/// Helper type to indicate that a state change happened on the worker
+struct UpdateEvent;
+
+/// Helper trait to implement the Typestate pattern for Worker
 pub trait WorkerState {}
 
+/// Initial state of a Worker
+///
+/// While in the `Uninitialized` state, jobs and resources may be
+/// assigned to the Worker
 pub struct Uninitialized {
     domain: Domain,
     resources: Resources,
 }
 
+/// Initialized worker state
+///
+/// This is the state where the `Worker` moves to after receiving an initial state.
+///
+/// At this point the Worker is ready to start seeking a target state
 pub struct Ready {
     planner: Planner,
     system: Arc<RwLock<System>>,
@@ -124,27 +144,123 @@ pub struct Ready {
     patches: Sender<Patch>,
     writer_closed: Arc<Notify>,
     interrupt: AutoInterrupt,
-}
-
-#[derive(Debug, Clone)]
-struct UpdateEvent;
-
-pub struct Idle {
-    planner: Planner,
-    system: Arc<RwLock<System>>,
-    updates: broadcast::Sender<UpdateEvent>,
-    patches: Sender<Patch>,
-    writer_closed: Arc<Notify>,
     status: SeekStatus,
 }
 
+/// Final state of a Worker
+///
+/// No further Worker operations can be performed after this state
 pub struct Stopped {}
 
 impl WorkerState for Uninitialized {}
 impl WorkerState for Ready {}
-impl WorkerState for Idle {}
 impl WorkerState for Stopped {}
 
+/// Core component for workflow generation and execution
+///
+/// Given a target to [`Worker::seek_target`], the `Worker` will look for a plan that takes the
+/// system from the current state to the target, execute the plan (workflow) and re-plan if some
+/// pre-condition failed at runtime.
+///
+/// # Worker setup
+///
+/// A worker may be in one of the following states
+/// - `Uninitialized` is the initial state of the worker, while the worker is in this state, new
+///   [jobs](`Worker::job`) and [resources](`Worker::resource`) may be configured to the worker.
+/// - `Ready` this is the default state. The `Worker` goes into this state when an [initial
+///   state](`Worker::initial_state`) been defined or when a `seek_target` operation terminates
+///   without error.
+/// - `Stopped` is the final state of the Worker. The worker will go into this state if [`Worker::stop`] is
+///   called and no furher operations can be performed.
+///
+///
+/// ```rust,no_run
+/// use anyhow::{Context, Result};
+/// use std::collections::HashMap;
+/// use serde::{Deserialize, Serialize};
+///
+/// use mahler::worker::{Worker, SeekTarget, SeekStatus};
+/// use mahler::task::prelude::*;
+///
+/// #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// struct Counters(HashMap<String, i32>);
+///
+/// // A simple job to update a counter
+/// fn plus_one() -> Update<i32> { todo!() }
+///
+/// // A composite job
+/// fn plus_two() -> Vec<Task> { todo!() }
+///
+/// #[tokio::main]
+/// async fn main() -> Result<()> {
+///     // create a new uninitialized worker
+///     let worker = Worker::new()
+///         // configure jobs
+///         .job("/{counter}", update(plus_one))
+///         .job("/{counter}", update(plus_two))
+///         // initialize the worker moving it to the `Ready` state
+///         .initial_state(Counters(HashMap::from([
+///             ("a".to_string(), 0),
+///             ("b".to_string(), 0),
+///         ])))
+///         // start searching for a target
+///         .seek_target(Counters(HashMap::from([
+///             ("a".to_string(), 1),
+///             ("b".to_string(), 2),
+///         ])))
+///         // wait for a result
+///         .await
+///         // fail if something bad happens
+///         .with_context(|| "failed to reach target state")?;
+///
+///     if matches!(worker.status(), SeekStatus::Success) {
+///         println!("SUCCESS!");
+///     }
+///
+///     Ok(())
+/// }
+/// ```
+///
+/// # State type compatibility
+///
+/// Note that the Worker may use a different type for the internal state `<O>`
+/// and the target state `<I>`. This is because the internal state may have additional
+/// fields that may not be desirable to consider when comparing states (e.g runtime states
+/// timestamps, variable data, etc.). These types must be compatible to ensure the Worker
+/// can convert between them without issues.
+///
+/// In the example below, `InternalState` can be serialized into `TargetState` and
+/// vice-versa.
+///
+/// ```rust
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Debug, Serialize, Deserialize)]
+/// struct SystemState {
+///     pub config: String,
+///     pub last_update: Option<String>,
+/// }
+///
+/// struct TargetState {
+///     pub config: String,
+/// }
+/// ```
+///
+/// Serialization will fail between the two states below as `other_config` is not nullable.
+///
+/// ```rust
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Debug, Serialize, Deserialize)]
+/// struct SystemState {
+///     pub config: String,
+///     pub other_config: String,
+/// }
+///
+/// struct TargetState {
+///     pub config: String,
+/// }
+/// ```
 pub struct Worker<O, S: WorkerState = Uninitialized, I = O> {
     inner: S,
     _output: std::marker::PhantomData<O>,
@@ -152,6 +268,7 @@ pub struct Worker<O, S: WorkerState = Uninitialized, I = O> {
 }
 
 impl<O, S: WorkerState, I> Worker<O, S, I> {
+    /// Create a worker from a inner [`WorkerState`]
     fn from_inner(inner: S) -> Self {
         Worker {
             inner,
@@ -159,9 +276,17 @@ impl<O, S: WorkerState, I> Worker<O, S, I> {
             _input: std::marker::PhantomData,
         }
     }
+
+    /// Stop following system updates
+    ///
+    /// This drops all internal structure for the Worker and no further
+    /// operations can be performed after this is called.
+    pub fn stop(self) -> Worker<O, Stopped, I> {
+        Worker::from_inner(Stopped {})
+    }
 }
 
-// -- Worker initialization
+// Worker initialization
 
 impl<O> Default for Worker<O, Uninitialized> {
     fn default() -> Self {
@@ -170,6 +295,7 @@ impl<O> Default for Worker<O, Uninitialized> {
 }
 
 impl<O> Worker<O, Uninitialized> {
+    /// Create a new uninitialized Worker instance
     pub fn new() -> Self {
         Worker::from_inner(Uninitialized {
             domain: Domain::new(),
@@ -179,19 +305,77 @@ impl<O> Worker<O, Uninitialized> {
 }
 
 impl<O> Worker<O, Uninitialized> {
-    /// Add a job to the worker domain
+    /// Add a [Job](`crate::task::Job`) to the worker domain
     pub fn job(mut self, route: &'static str, job: Job) -> Self {
         self.inner.domain = self.inner.domain.job(route, job);
         self
     }
 
-    /// Add a list if jobs linked to a route on the worker domain
+    /// Add a list if jobs linked to the same route on the worker domain
+    ///
+    /// This is a convenience method to simplify the configuration of multiple jobs
+    /// for the same domain
+    ///
+    /// ```rust
+    /// use serde::{Deserialize, Serialize};
+    /// use mahler::worker::{Worker, Uninitialized};
+    /// use mahler::task::prelude::*;
+    ///
+    /// #[derive(Serialize, Deserialize)]
+    /// struct StateModel;
+    ///
+    /// fn foo() {}
+    /// fn bar() {}
+    ///
+    /// let worker: Worker<StateModel, Uninitialized> = Worker::new()
+    ///         .jobs("/{foo}", [update(foo), update(bar)]);
+    /// ```
     pub fn jobs<const N: usize>(mut self, route: &'static str, list: [Job; N]) -> Self {
         self.inner.domain = self.inner.domain.jobs(route, list);
         self
     }
 
     /// Add a shared resource to use within tasks
+    ///
+    /// Resources are stored by [TypeId](`std::any::TypeId`),
+    /// meaning only one resource of each type is allowed. If multiple resources of the same type
+    /// are configured, only the last one will be used.
+    ///
+    /// ```rust
+    /// use serde::{Deserialize, Serialize};
+    /// use mahler::worker::{Worker, Uninitialized};
+    ///
+    /// #[derive(Serialize, Deserialize)]
+    /// struct StateModel;
+    ///
+    /// // MyConnection represents a shared resource
+    /// struct MyConnection;
+    ///
+    /// let conn = MyConnection {/* .. */};
+    /// let otherconn = MyConnection { /* .. */};
+    ///
+    /// let worker: Worker<StateModel, Uninitialized> = Worker::new()
+    ///         // add conn as resource
+    ///         .resource(conn)
+    ///         // only the last assignment of a resource of the same type
+    ///         // will be used
+    ///         .resource(otherconn);
+    /// ```
+    ///
+    /// Resources can be accessed by jobs using the [Res extractor](`crate::extract::Res`).
+    ///
+    /// ```rust
+    /// use mahler::task::prelude::*;
+    /// use mahler::extract::Res;
+    ///
+    /// struct MyConnection;
+    ///
+    /// fn job_with_resource(res: Res<MyConnection>) {
+    ///     // Access the worker MyConnection instance by dereferencing `res`.
+    ///     // Initializing the extractor will fail if no resource of type MyConnection
+    ///     // has been assigned to the worker.
+    /// }
+    /// ```
     pub fn resource<R>(mut self, res: R) -> Self
     where
         R: Send + Sync + 'static,
@@ -202,7 +386,15 @@ impl<O> Worker<O, Uninitialized> {
 
     /// Provide the initial worker state
     ///
-    /// This moves the state of the worker to `ready`
+    /// This moves the state of the worker to `Ready`. No further jobs or resources may
+    /// be assigned after `initial_state` has been called.
+    ///
+    /// Note that an additional input type `<I>` may be defined at this point in case
+    /// a different model is needed for the target state. See [State Type Compatibility](#state-type-compatibility).
+    ///
+    /// # Errors
+    /// The method will throw a [SerializationError](`crate::errors::SerializationError`) if the
+    /// provided state cannot be converted to the internal state representation.
     pub fn initial_state<I>(self, state: O) -> Result<Worker<O, Ready, I>, SerializationError>
     where
         O: Serialize,
@@ -266,18 +458,23 @@ impl<O> Worker<O, Uninitialized> {
             patches: tx,
             writer_closed,
             interrupt: AutoInterrupt::default(),
+            status: SeekStatus::Success,
         }))
     }
 }
 
 // -- Worker is ready to receive a target state
 
-pub struct FollowStream<T> {
+/// Helper type to receive Worker state changes
+///
+/// See [`Worker::follow`]
+struct FollowStream<T> {
     inner: Pin<Box<dyn Stream<Item = T> + Send + 'static>>,
 }
 
 impl<T> FollowStream<T> {
-    pub fn new<S>(stream: S) -> Self
+    /// Create a new FollowStream from a Stream
+    fn new<S>(stream: S) -> Self
     where
         S: Stream<Item = T> + Send + 'static,
     {
@@ -298,10 +495,13 @@ impl<T> Stream for FollowStream<T> {
     }
 }
 
+/// Returns a stream of updated states after each system change.
+///
+/// The stream is best effort, meaning updates may be missed if the receiver lags behind.
 fn follow_worker<T>(
     updates: broadcast::Sender<UpdateEvent>,
     syslock: Arc<RwLock<System>>,
-) -> FollowStream<T>
+) -> impl Stream<Item = T>
 where
     T: DeserializeOwned,
 {
@@ -324,12 +524,15 @@ where
 }
 
 impl<O, I> Worker<O, Ready, I> {
-    /// Stop following system updates
-    pub fn stop(self) -> Worker<O, Stopped, I> {
-        Worker::from_inner(Stopped {})
-    }
-
     /// Read the current system state from the worker
+    ///
+    /// The system state is behind a [RwLock](`tokio::sync::RwLock`)
+    /// to allow for concurrent modification, which is why this method is `async`.
+    ///
+    /// # Errors
+    ///
+    /// The method will throw a [SerializationError](`crate::errors::SerializationError`) if the
+    /// internal state cannot be deserialized into the output type `<O>`
     pub async fn state(&self) -> Result<O, SerializationError>
     where
         O: DeserializeOwned,
@@ -339,9 +542,44 @@ impl<O, I> Worker<O, Ready, I> {
         Ok(state)
     }
 
-    /// Read the current system state from the worker
-    /// using the target type to modify and re-insert
-    /// into the worker
+    /// Read the current system state from the worker using the input type `<I>`
+    ///
+    /// This is a helper method to allow state manipulation
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use serde::{Deserialize, Serialize};
+    /// use mahler::worker::{Worker, SeekTarget};
+    ///
+    /// #[derive(Debug, Serialize, Deserialize)]
+    /// struct SystemState;
+    ///
+    /// #[derive(Debug, Serialize, Deserialize)]
+    /// struct TargetState;
+    ///
+    /// # tokio_test::block_on(async move {
+    /// let worker = Worker::new()
+    ///     // todo: configure jobs
+    ///     .initial_state(SystemState {/* .. */})
+    ///     .seek_target(TargetState {/* .. */})
+    ///     .await
+    ///     .unwrap();
+    ///
+    /// let state = worker.state_as_target().await.unwrap();
+    ///
+    /// // todo: modify state
+    /// let new_target = state;
+    ///
+    /// // trigger new search
+    /// worker.seek_target(new_target);
+    /// # })
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// The method will throw a [SerializationError](`crate::errors::SerializationError`) if the
+    /// internal state cannot be deserialized into the output type `<O>`
     pub async fn state_as_target(&self) -> Result<I, SerializationError>
     where
         I: DeserializeOwned,
@@ -351,19 +589,68 @@ impl<O, I> Worker<O, Ready, I> {
         Ok(state)
     }
 
-    /// Returns a stream of updated states after each system change.
+    /// Returns a stream of updated states after each system change
     ///
-    /// Best effort: updates may be missed if the receiver lags behind.
-    /// Fetches the current system state at the time of notification.
-    pub fn follow(&self) -> FollowStream<O>
+    /// The stream is best effort, meaning updates may be missed if the receiver lags behind.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use serde::{Deserialize, Serialize};
+    /// use mahler::worker::{Worker, SeekTarget};
+    /// use tokio_stream::StreamExt;
+    ///
+    /// #[derive(Debug, Serialize, Deserialize)]
+    /// struct SystemState;
+    ///
+    /// # tokio_test::block_on(async move {
+    /// let worker = Worker::new()
+    ///     // todo: configure jobs
+    ///     .initial_state(SystemState {/* .. */}).unwrap();
+    ///
+    /// // Get a state stream
+    /// let mut update_stream = worker.follow();
+    /// tokio::spawn(async move {
+    ///     while let Some(state) = update_stream.next().await {
+    ///         println!("Updated State: {:?}", state);
+    ///     }
+    /// });
+    ///
+    /// // Start state search
+    /// let worker = worker.seek_target(SystemState {/* .. */})
+    ///     .await
+    ///     .unwrap();
+    /// # })
+    /// ```
+    pub fn follow(&self) -> impl Stream<Item = O>
     where
         O: DeserializeOwned,
     {
         follow_worker(self.inner.updates.clone(), Arc::clone(&self.inner.system))
     }
 
+    /// Return the result of the last worker run
+    ///
+    /// It will return `SeekStatus::Success` for a newly initialized `Worker`
+    pub fn status(&self) -> &SeekStatus {
+        &self.inner.status
+    }
+
     #[instrument(skip_all, fields(return=field::Empty), err)]
-    pub async fn seek_target(self, tgt: I) -> Result<Worker<O, Idle, I>, FatalError>
+    /// Trigger system changes by providing a new target state for the worker
+    ///
+    /// When called, this method tells the worker to look for a plan for the given
+    /// target. If a plan is found, the worker then will try to execute the resulting workflow and
+    /// and terminate if interrupted or a runtime error occurs. If a requirement changes between
+    /// planning and runtime, the Worker triggers a re-plan.
+    ///
+    /// If no plan is found, the search terminates with a [`SeekStatus::NotFound`].
+    ///
+    /// # Errors
+    /// The method will result in a [`FatalError`] if a serialization issue occurs while converting
+    /// between state types, if the worker runtime panics or there is an unexpected error during
+    /// planning.
+    pub async fn seek_target(self, tgt: I) -> Result<Worker<O, Ready, I>, FatalError>
     where
         I: Serialize + DeserializeOwned,
     {
@@ -447,7 +734,7 @@ impl<O, I> Worker<O, Ready, I> {
                             match res {
                                 Ok(SeekResult::TargetReached) => {
                                     cur_span.record("return", "success");
-                                    return Ok((planner, SeekStatus::TargetReached));
+                                    return Ok((planner, SeekStatus::Success));
                                 }
                                 Ok(SeekResult::WorkflowCompleted) => {}
                                 Ok(SeekResult::Interrupted) => {
@@ -502,13 +789,13 @@ impl<O, I> Worker<O, Ready, I> {
             Err(e) => Err(Panicked(e))?,
         }?;
 
-        // autointerupt isc
-        Ok(Worker::from_inner(Idle {
+        Ok(Worker::from_inner(Ready {
             planner,
             system,
             updates,
             patches,
             writer_closed,
+            interrupt: AutoInterrupt::default(),
             status,
         }))
     }
@@ -518,81 +805,9 @@ impl<O, I> Worker<O, Ready, I> {
 impl<O: Send, I: Serialize + DeserializeOwned + Send> SeekTarget<O, I>
     for Result<Worker<O, Ready, I>, SerializationError>
 {
-    async fn seek_target(self, tgt: I) -> Result<Worker<O, Idle, I>, FatalError> {
+    async fn seek_target(self, tgt: I) -> Result<Worker<O, Ready, I>, FatalError> {
         let worker = self?;
         worker.seek_target(tgt).await
-    }
-}
-
-// -- Worker is idle seek target finished
-
-impl<O, I> Worker<O, Idle, I> {
-    /// Stop following system updates
-    pub fn stop(self) -> Worker<O, Stopped> {
-        Worker::from_inner(Stopped {})
-    }
-
-    /// Returns a stream of updated states after each system change.
-    ///
-    /// Best effort: updates may be missed if the receiver lags behind.
-    /// Fetches the current system state at the time of notification.
-    pub fn follow(&self) -> FollowStream<O>
-    where
-        O: DeserializeOwned,
-    {
-        follow_worker(self.inner.updates.clone(), Arc::clone(&self.inner.system))
-    }
-
-    /// Read the current system state from the worker
-    pub async fn state(&self) -> Result<O, SerializationError>
-    where
-        O: DeserializeOwned,
-    {
-        let system = self.inner.system.read().await;
-        let state = system.state()?;
-        Ok(state)
-    }
-
-    /// Read the current system state from the worker
-    /// using the target type to modify and re-insert
-    /// into the worker
-    pub async fn state_as_target(&self) -> Result<I, SerializationError>
-    where
-        I: DeserializeOwned,
-    {
-        let system = self.inner.system.read().await;
-        let state = system.state()?;
-        Ok(state)
-    }
-
-    /// Return the result of the last worker run
-    pub fn status(&self) -> &SeekStatus {
-        &self.inner.status
-    }
-
-    pub async fn seek_target(self, tgt: I) -> Result<Worker<O, Idle, I>, FatalError>
-    where
-        I: Serialize + DeserializeOwned,
-    {
-        let Idle {
-            planner,
-            system,
-            updates,
-            writer_closed,
-            patches,
-            ..
-        } = self.inner;
-
-        Worker::from_inner(Ready {
-            planner,
-            system,
-            updates,
-            patches,
-            writer_closed,
-            interrupt: AutoInterrupt::default(),
-        })
-        .seek_target(tgt)
-        .await
     }
 }
 
@@ -669,7 +884,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(worker.status(), &SeekStatus::TargetReached);
+        assert_eq!(worker.status(), &SeekStatus::Success);
         let state = worker.state().await.unwrap();
         assert_eq!(
             state,
@@ -719,7 +934,7 @@ mod tests {
 
         // Wait for worker to finish
         let worker = worker.seek_target(2).await.unwrap();
-        assert_eq!(worker.status(), &SeekStatus::TargetReached);
+        assert_eq!(worker.status(), &SeekStatus::Success);
 
         let results = results.read().await;
         assert_eq!(*results, vec![Some(1), Some(2)]);
@@ -755,7 +970,7 @@ mod tests {
 
         // Wait for worker to finish
         let worker = worker.seek_target(100).await.unwrap();
-        assert_eq!(worker.status(), &SeekStatus::TargetReached);
+        assert_eq!(worker.status(), &SeekStatus::Success);
 
         let results = results.read().await;
         assert_eq!(
@@ -840,7 +1055,7 @@ mod tests {
         let worker = worker.seek_target(1).await.unwrap();
 
         // Wait for worker to finish
-        assert_eq!(worker.status(), &SeekStatus::TargetReached);
+        assert_eq!(worker.status(), &SeekStatus::Success);
 
         // Close the stream
         worker.stop();

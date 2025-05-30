@@ -11,6 +11,47 @@ use tracing_subscriber::registry::{LookupSpan, Scope};
 use tracing_subscriber::{layer::Context, Layer};
 
 static INIT: Once = Once::new();
+
+/// Register a [`tracing_subscriber`] to output human readable [`mod@log`] records
+///
+/// This can be combined with a preferred logging implementation to generate logs, for instance, if
+/// using the [env_logger](https://docs.rs/env_logger/latest/env_logger/) crate.
+///
+/// ```rust,no_run
+/// use mahler::worker::init_logging;
+///
+/// // Convert tracing logs into `log` crate logs
+/// init_logging();
+///
+/// // Configure env_logger to show logs to stdout
+/// env_logger::builder().format_target(false).init();
+/// env_logger::init();
+/// ```
+///
+/// Will generate an output like the following to stdout
+///
+/// ```sh
+/// [2025-05-22T21:10:11Z INFO ] applying target state
+/// [2025-05-22T21:10:11Z INFO ] searching workflow
+/// [2025-05-22T21:10:11Z DEBUG] pending changes
+/// [2025-05-22T21:10:11Z DEBUG] - {"op":"replace","path":"/a","value":1}
+/// [2025-05-22T21:10:11Z DEBUG] - {"op":"replace","path":"/b","value":2}
+/// [2025-05-22T21:10:11Z INFO ] searching workflow: success
+/// [2025-05-22T21:10:11Z DEBUG] will execute the following tasks:
+/// [2025-05-22T21:10:11Z DEBUG] + ~ - a++
+/// [2025-05-22T21:10:11Z DEBUG]   ~ - b++
+/// [2025-05-22T21:10:11Z DEBUG] - b++
+/// [2025-05-22T21:10:11Z INFO ] a++: running ...
+/// [2025-05-22T21:10:11Z INFO ] b++: running ...
+/// [2025-05-22T21:10:11Z INFO ] a++: success
+/// [2025-05-22T21:10:11Z INFO ] b++: success
+/// [2025-05-22T21:10:11Z INFO ] b++: running ...
+/// [2025-05-22T21:10:11Z INFO ] b++: success
+/// [2025-05-22T21:10:11Z INFO ] plan executed successfully
+/// [2025-05-22T21:10:11Z INFO ] searching workflow
+/// [2025-05-22T21:10:11Z INFO ] nothing else to do: target state reached
+/// [2025-05-22T21:10:11Z INFO ] target state applied
+/// ```
 pub fn init() {
     INIT.call_once(|| tracing_subscriber::registry().with(ToLogLayer).init());
 }

@@ -12,8 +12,8 @@ use std::ops::{Deref, DerefMut};
 
 use crate::errors::ExtractionError;
 use crate::path::Path;
-use crate::system::{FromSystem, System};
-use crate::task::{Context, Effect, Error, IntoResult};
+use crate::system::System;
+use crate::task::{Context, Effect, Error, FromSystem, IntoResult};
 
 /// Extracts a pointer to a sub-element of the global state indicated
 /// by the path.
@@ -22,6 +22,43 @@ use crate::task::{Context, Effect, Error, IntoResult};
 ///
 /// The pointer can be null, meaning the parent of the element exists,
 /// but the specific location pointed by the path does not exist.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use mahler::{
+///     extract::Pointer,
+///     task::{Handler, create, with_io, Create},
+///     worker::{Worker, Ready}
+/// };
+/// use serde::{Serialize, Deserialize};
+///
+/// #[derive(Serialize,Deserialize)]
+/// struct SystemState {/* ... */};
+///
+/// fn foo_bar(mut ptr: Pointer<i32>) -> Create<i32> {
+///     // ptr will be "null" if the value does
+///     // not exist beforehand
+///     if ptr.is_none() {
+///         ptr.zero();
+///     }
+///
+///     with_io(ptr, |ptr| async {
+///         // do something with ptr at runtime
+///         Ok(ptr)
+///     })
+/// }
+///
+/// let worker: Worker<SystemState, Ready> = Worker::new()
+///     .job("/{foo}/{bar}", create(foo_bar))
+///     .initial_state(SystemState {/* ... */})
+///     .unwrap();
+/// ```
+///
+/// # Errors
+///
+/// Initializing the extractor will fail if the path assigned to the job cannot be resolved or the
+/// value pointed by the path cannot be deserialized into type `<T>`
 #[derive(Debug)]
 pub struct Pointer<T> {
     initial: Value,
@@ -40,38 +77,23 @@ impl<T> Pointer<T> {
         }
     }
 
-    /// Assign a value to location indicated by
-    /// the path.
+    /// Assign a value to location indicated by the path.
     pub fn assign(&mut self, value: impl Into<T>) -> &mut T {
         self.insert(value.into())
     }
 
-    /// Apply a function to the internal value of the pointer
-    /// if it exists
-    pub fn update_with<F: FnOnce(T) -> T>(mut self, f: F) -> Self {
-        self.state = self.state.map(f);
-        self
-    }
-
-    /// Clear the value at the location indicated by
-    /// the path
+    /// Clear the value at the location indicated by the path
     pub fn unassign(mut self) -> Self {
         self.state.take();
         self
     }
 
-    /// Initialize the location pointed by the path
-    /// with the defaut value of the type T.
+    /// Initialize the location pointed by the path with the defaut value of the type T.
     pub fn zero(&mut self) -> &mut T
     where
         T: Default,
     {
         self.assign(T::default())
-    }
-
-    /// Return true if the pointer is null
-    pub fn is_null(&self) -> bool {
-        self.state.is_none()
     }
 }
 
@@ -86,6 +108,7 @@ impl<T: DeserializeOwned> FromSystem for Pointer<T> {
         let parent = json_ptr.parent().unwrap_or(json_ptr);
 
         // Try to resolve the parent or fail
+        // XXX: how can this happen?
         parent
             .resolve(root)
             .with_context(|| format!("Failed to resolve path {}", context.path))?;
@@ -107,6 +130,7 @@ impl<T: DeserializeOwned> FromSystem for Pointer<T> {
                 ResolveError::NotFound { .. } => (None, Value::Null),
                 ResolveError::OutOfBounds { .. } => (None, Value::Null),
                 _ => {
+                    // XXX: how can this happen?
                     return Err(
                         anyhow!(e).context(format!("Failed to resolve path {}", context.path))
                     )?;
@@ -212,11 +236,50 @@ impl<T, E> From<Pointer<T>> for Effect<Pointer<T>, E> {
     }
 }
 
-/// Extracts a sub-element of a state S as indicated by
-/// a path.
+/// Extracts a pointer to a sub-element of the global state indicated
+/// by the path.
 ///
-/// Differently from Pointer, the View presumes the location
-/// pointed by the value exists and extraction will fail otherwise
+/// The type of the sub-element is given by the type parameter T.
+///
+/// Differently from `Pointer`, the `View` extractor expects that the location
+/// pointed by the Job path exists and extraction will fail during initialization otherwise.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use mahler::{
+///     extract::View,
+///     task::{Handler, update, with_io, Update},
+///     worker::{Worker, Ready}
+/// };
+/// use serde::{Serialize, Deserialize};
+///
+/// #[derive(Serialize,Deserialize)]
+/// struct SystemState {/* ... */};
+///
+/// fn foo_bar(mut view: View<i32>) -> Update<i32> {
+///     // view can be dereferenced into the given type
+///     // and is guaranteed to exist at this point
+///     if *view < 5 {
+///         // do something
+///     }
+///
+///     with_io(view, |view| async {
+///         // do something with `view` at runtime
+///         Ok(view)
+///     })
+/// }
+///
+/// let worker: Worker<SystemState, Ready> = Worker::new()
+///     .job("/{foo}/{bar}", update(foo_bar))
+///     .initial_state(SystemState {/* ... */})
+///     .unwrap();
+/// ```
+///
+/// # Errors
+///
+/// Initializing the extractor will fail if the path assigned to the job cannot be resolved (or it
+/// resolves to `Null`) or the value pointed by the path cannot be deserialized into type `<T>`
 #[derive(Debug)]
 pub struct View<T>(Pointer<T>);
 
@@ -226,7 +289,8 @@ impl<T: DeserializeOwned> FromSystem for View<T> {
     fn from_system(system: &System, context: &Context) -> Result<Self, Self::Error> {
         let pointer = Pointer::<T>::from_system(system, context)?;
 
-        if pointer.state.is_none() {
+        // Fail if pointer is null
+        if pointer.is_none() {
             return Err(anyhow!("Path {} does not exist", context.path).into());
         }
 

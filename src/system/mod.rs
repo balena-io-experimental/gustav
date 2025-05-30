@@ -8,9 +8,6 @@ use std::{
     sync::Arc,
 };
 
-mod from_system;
-pub(crate) use from_system::*;
-
 #[derive(Clone)]
 pub struct Resources(HashMap<TypeId, Arc<dyn Any + Send + Sync>>);
 

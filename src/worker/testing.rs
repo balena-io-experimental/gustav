@@ -4,7 +4,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use thiserror::Error;
 use tokio::sync::RwLock;
 
-use super::{Idle, Ready, Worker};
+use super::{Ready, Worker};
 use crate::planner::{Error as PlannerError, Planner};
 use crate::system::System;
 use crate::task::{self, Context};
@@ -12,9 +12,12 @@ use crate::{task::Task, workflow::Workflow};
 
 #[derive(Debug, Error)]
 #[error("workflow not found")]
+/// A workflow could not be found
+///
+/// This is returned by [`Worker::find_workflow`] when used on testing.
 pub struct NotFound;
 
-pub async fn find_workflow<I>(
+async fn find_workflow<I>(
     system: &Arc<RwLock<System>>,
     planner: &Planner,
     tgt: I,
@@ -37,17 +40,15 @@ where
 }
 
 impl<O, I> Worker<O, Ready, I> {
-    /// Find a workflow within the context of the worker
-    ///
-    /// This function is only meant for testing and is not available
-    /// if debug_assertions is disabled.
+    #[cfg_attr(docsrs, doc(cfg(debug_assertions)))]
+    /// Find a workflow for testing purposes within the context of the worker
     ///
     /// # Example
     /// ```rust
-    /// use gustav::task::{self, prelude::*};
-    /// use gustav::extract::{View, Target};
-    /// use gustav::worker::Worker;
-    /// use gustav::{Dag, seq};
+    /// use mahler::task::{self, prelude::*};
+    /// use mahler::extract::{View, Target};
+    /// use mahler::worker::Worker;
+    /// use mahler::{Dag, seq};
     ///
     /// fn plus_one(mut counter: View<i32>, Target(tgt): Target<i32>) -> IO<i32> {
     ///    if *counter < tgt {
@@ -74,6 +75,10 @@ impl<O, I> Worker<O, Ready, I> {
     /// assert_eq!(workflow.to_string(), expected.to_string());
     /// # })
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if any error happens during planning
     pub async fn find_workflow(&self, tgt: I) -> Result<Workflow, NotFound>
     where
         I: Serialize + DeserializeOwned,
@@ -118,19 +123,17 @@ impl<O, I> Worker<O, Ready, I> {
         Ok(())
     }
 
+    #[cfg_attr(docsrs, doc(cfg(debug_assertions)))]
     /// Test a task within the context of the worker domain
-    ///
-    /// This function is only meant for testing and is not available
-    /// if debug_assertions is disabled.
     ///
     /// # Example
     /// ```rust
     /// use std::time::Duration;
     /// use tokio::time::sleep;
     ///
-    /// use gustav::task::{self, prelude::*};
-    /// use gustav::extract::{View, Target};
-    /// use gustav::worker::Worker;
+    /// use mahler::task::{self, prelude::*};
+    /// use mahler::extract::{View, Target};
+    /// use mahler::worker::Worker;
     ///
     /// fn plus_one(mut counter: View<i32>, Target(tgt): Target<i32>) -> IO<i32> {
     ///    if *counter < tgt {
@@ -157,6 +160,9 @@ impl<O, I> Worker<O, Ready, I> {
     /// assert_eq!(worker.run_task(plus_one.with_target(2)).await.unwrap(), 2);
     /// # })
     /// ```
+    ///
+    /// # Panics
+    /// This function will panic if a sewrialization or internal error happens during execution
     pub async fn run_task(&self, mut task: Task) -> Result<O, task::Error>
     where
         O: Serialize + DeserializeOwned,
@@ -177,15 +183,6 @@ impl<O, I> Worker<O, Ready, I> {
         let new_state = system.state().expect("failed to serialize output state");
 
         Ok(new_state)
-    }
-}
-
-impl<O, I> Worker<O, Idle, I> {
-    pub async fn find_workflow(&self, tgt: I) -> Result<Workflow, NotFound>
-    where
-        I: Serialize + DeserializeOwned,
-    {
-        find_workflow::<I>(&self.inner.system, &self.inner.planner, tgt).await
     }
 }
 
@@ -295,9 +292,9 @@ mod tests {
 
         // We expect a linear DAG with three tasks
         let expected: Dag<&str> = par!(
-            "gustav::worker::testing::tests::plus_one(/one)",
-            "gustav::worker::testing::tests::plus_one(/two)"
-        ) + seq!("gustav::worker::testing::tests::plus_one(/one)",);
+            "mahler::worker::testing::tests::plus_one(/one)",
+            "mahler::worker::testing::tests::plus_one(/two)"
+        ) + seq!("mahler::worker::testing::tests::plus_one(/one)",);
 
         assert_eq!(workflow.to_string(), expected.to_string(),);
     }

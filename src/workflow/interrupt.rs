@@ -5,6 +5,9 @@ use std::sync::{
 use tokio::sync::Notify;
 
 #[derive(Clone)]
+/// An interrupt flag with notification capabilities
+///
+/// Whenever the flag is set, a signal is sent to interrupt waiters for action.
 pub(crate) struct Interrupt {
     flag: Arc<AtomicBool>,
     notify: Arc<Notify>,
